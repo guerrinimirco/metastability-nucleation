@@ -311,7 +311,7 @@ def compute_Qstar_table_betaeq(hadronic_table, params,
                     row_start_guess = current_guess
 
         if verbose:
-            print(f"  T={T_arr[i_T]:.1f} -> {row_converged}/{len(n_B_arr)} converged")
+            print(f"  [{i_T+1}/{len(T_arr)}] T={T_arr[i_T]:.1f} -> {row_converged}/{len(n_B_arr)} converged")
 
     hadronic_grids = {'n_B_H': n_B_arr, 'T': T_arr}
     return QstarFrozenTableData(eq_type='betaeq', hadronic_grids=hadronic_grids, data=data)
@@ -381,7 +381,9 @@ def compute_Qstar_table_trapped(hadronic_table, params,
                         row_start_guess = current_guess
 
             if verbose:
-                print(f"  Y_L_H={Y_L_H:.2f}, T={T_arr[i_T]:.1f} -> {row_converged}/{len(n_B_arr)} converged")
+                step = i_YL * len(T_arr) + i_T + 1
+                n_steps = len(Y_L_arr) * len(T_arr)
+                print(f"  [{step}/{n_steps}] Y_L_H={Y_L_H:.2f}, T={T_arr[i_T]:.1f} -> {row_converged}/{len(n_B_arr)} converged")
 
     hadronic_grids = {'n_B_H': n_B_arr, 'Y_L_H': Y_L_arr, 'T': T_arr}
     return QstarFrozenTableData(eq_type='trapped', hadronic_grids=hadronic_grids, data=data)
@@ -449,7 +451,9 @@ def compute_Qstar_table_fixedYC(hadronic_table, params,
                         row_start_guess = current_guess
 
             if verbose:
-                print(f"  Y_C_H={Y_C_arr[i_YC]:.2f}, T={T_arr[i_T]:.1f} -> {row_converged}/{len(n_B_arr)} converged")
+                step = i_YC * len(T_arr) + i_T + 1
+                n_steps = len(Y_C_arr) * len(T_arr)
+                print(f"  [{step}/{n_steps}] Y_C_H={Y_C_arr[i_YC]:.2f}, T={T_arr[i_T]:.1f} -> {row_converged}/{len(n_B_arr)} converged")
 
     hadronic_grids = {'n_B_H': n_B_arr, 'Y_C_H': Y_C_arr, 'T': T_arr}
     return QstarFrozenTableData(eq_type='fixedYC', hadronic_grids=hadronic_grids, data=data)
