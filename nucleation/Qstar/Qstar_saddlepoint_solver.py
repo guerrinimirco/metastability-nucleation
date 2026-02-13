@@ -15,8 +15,8 @@ import os
 import numpy as np
 from types import SimpleNamespace
 from scipy.optimize import root
-from eos.alphabag.eos import _build_result
-from eos.alphabag.thermodynamics_quarks import compute_alphabag_thermo_from_mu
+from eos.alphabag.eos import _build_result, _build_cfl_result
+from eos.alphabag.thermodynamics_quarks import compute_alphabag_thermo_from_mu, compute_cfl_thermo_from_mu
 from eos.general.thermodynamics_leptons import electron_thermo, neutrino_thermo
 from dataclasses import dataclass
 
@@ -200,12 +200,101 @@ def solve_Qstar(H, params, electric_charge_neutrality,
 
 
 # =============================================================================
+# Qstar CFL computation
+# =============================================================================
+def solve_Qstar_cfl(H, params, Delta0, electric_charge_neutrality,
+                    include_photons, include_gluons,
+                    include_thermal_neutrinos, initial_guess):
+    """
+    Parameters
+    ----------
+    H : object
+        Hadronic state (same as solve_Qstar).
+    params : AlphaBagParams
+    Delta0 : float
+        Zero-temperature CFL pairing gap (MeV).
+    electric_charge_neutrality : str
+        'local' or 'global'
+    initial_guess : initial guess for [mu_u, mu_d, mu_s, mu_e] (MeV).
+    equations:
+    CFL Y_C: Y_C_Qs(μ_u, μ_d, μ_s) = 0
+    CFL Y_S: Y_S_Qs(μ_u, μ_d, μ_s) = 1
+    saddle point: μ_B_H + Y_C_Qs·μ_C_H + Y_S_Qs·μ_S_H + Y_e_Qs·μ_e_H + Y_ν_Qs·μ_ν_H = μ_B_Qs + Y_C_Qs·μ_C_Qs + Y_S_Qs·μ_S_Qs + Y_e_Qs·μ_e_Qs + Y_ν_Qs·μ_ν_Qs
+    if electric_charge_neutrality == "local": Y_C_Qs(μ_u, μ_d, μ_s) - Y_e_Qs(μ_e) = 0
+    if electric_charge_neutrality == "global": μ_e_Qs = μ_e_H
+    global neutrino trapping [or no neutrino]: μ_ν_Qs = μ_ν_H [ = 0 for no neutrino]
+
+    Returns
+    -------
+    CFLEOSResult or None
+    """
+
+    def equations(x):
+
+        mu_u, mu_d, mu_s, mu_e = x
+        Qs = compute_cfl_thermo_from_mu(mu_u, mu_d, mu_s, H.T, Delta0, params)
+        e_Qs = electron_thermo(mu_e, H.T)
+
+        C_cfl_equation = Qs.Y_C  # = 0
+        S_cfl_equation = Qs.Y_S - 1.0  # = 0
+
+        Y_e_Qs = e_Qs.n / Qs.n_B if Qs.n_B > 0 else 0.0
+
+        # Minimization wrt n_e_Qs: local or global electric charge neutrality
+        if electric_charge_neutrality == "local":
+            electron_charge_neutrality_equation = Qs.Y_C - Y_e_Qs
+        elif electric_charge_neutrality == "global":
+            electron_charge_neutrality_equation = e_Qs.mu - H.mu_e
+
+        saddle_point_nBQs_equation = (Qs.mu_B-H.mu_B) + Qs.Y_C * (Qs.mu_C-H.mu_C) + Qs.Y_S * (Qs.mu_S-H.mu_S) + Y_e_Qs * (mu_e-H.mu_e)
+
+        return [
+            C_cfl_equation,
+            S_cfl_equation,
+            electron_charge_neutrality_equation,
+            saddle_point_nBQs_equation
+        ]
+
+    # Physics-based guess from hadronic chemical potentials
+    mu_d_h = (H.mu_B - H.mu_C) / 3.0
+    mu_u_h = (H.mu_B + 2.0 * H.mu_C) / 3.0
+    mu_s_h = mu_d_h + H.mu_S
+    h_guess = np.array([mu_u_h, mu_d_h, mu_s_h, H.mu_e])
+
+    if initial_guess is None:
+        initial_guess = h_guess
+
+    sol = root(equations, initial_guess, method='hybr')
+    if not sol.success:
+        sol = root(equations, initial_guess, method='lm')
+
+    if not sol.success and not np.allclose(initial_guess, h_guess):
+        sol = root(equations, h_guess, method='hybr')
+        if not sol.success:
+            sol = root(equations, h_guess, method='lm')
+
+    if not sol.success:
+        return None
+
+    mu_u, mu_d, mu_s, mu_e = sol.x
+
+    return _build_cfl_result(
+        mu_u, mu_d, mu_s, mu_e, H.T, Delta0, params,
+        include_photons=include_photons,
+        include_gluons=include_gluons,
+        include_thermal_neutrinos=include_thermal_neutrinos,
+        mu_nu=H.mu_nu
+    )
+
+
+# =============================================================================
 # Wrapper: compute Q* table for any equilibrium mode
 # =============================================================================
 def compute_Qstar_table(hadronic_table, params,
                         electric_charge_neutrality,
                         include_photons=True, include_gluons=True,
                         include_thermal_neutrinos=True,
+                        quark_phase='unpaired', Delta0=None,
                         initial_guess=None, verbose=False,
                         save_table=False, output_file=None):
     """
@@ -217,6 +306,11 @@ def compute_Qstar_table(hadronic_table, params,
         'beta_eq'           -> 2D (n_B, T)
         'trapped_neutrinos' -> 3D (n_B, Y_L, T)
         'fixed_yc'          -> 3D (n_B, Y_C, T)
+    quark_phase : str
+        'unpaired' : standard αBag quark matter
+        'cfl'      : Color-Flavor Locked phase (requires Delta0)
+    Delta0 : float or None
+        Zero-temperature CFL pairing gap (MeV). Required if quark_phase='cfl'.
     save_table : bool
         If True, export results to a text file.
     output_file : str or None
@@ -226,6 +320,9 @@ def compute_Qstar_table(hadronic_table, params,
     -------
     QstarSaddlepointTableData
     """
+    if quark_phase == 'cfl' and Delta0 is None:
+        raise ValueError("Delta0 must be provided for quark_phase='cfl'")
+
     solvers = {
         'beta_eq': compute_Qstar_table_betaeq,
         'trapped_neutrinos': compute_Qstar_table_trapped,
@@ -240,6 +337,7 @@ def compute_Qstar_table(hadronic_table, params,
         include_photons=include_photons,
         include_gluons=include_gluons,
         include_thermal_neutrinos=include_thermal_neutrinos,
+        quark_phase=quark_phase, Delta0=Delta0,
         initial_guess=initial_guess,
         verbose=verbose,
     )
@@ -259,6 +357,7 @@ def compute_Qstar_table_betaeq(hadronic_table, params,
                                electric_charge_neutrality,
                                include_photons=True, include_gluons=True,
                                include_thermal_neutrinos=True,
+                               quark_phase='unpaired', Delta0=None,
                                initial_guess=None, verbose=False):
     """
     Parameters
@@ -301,9 +400,14 @@ def compute_Qstar_table_betaeq(hadronic_table, params,
                 mu_nu=0.0,
             )
 
-            Qs = solve_Qstar(H, params, electric_charge_neutrality,
-                             include_photons, include_gluons,
-                             include_thermal_neutrinos, current_guess)
+            if quark_phase == 'cfl':
+                Qs = solve_Qstar_cfl(H, params, Delta0, electric_charge_neutrality,
+                                     include_photons, include_gluons,
+                                     include_thermal_neutrinos, current_guess)
+            else:
+                Qs = solve_Qstar(H, params, electric_charge_neutrality,
+                                 include_photons, include_gluons,
+                                 include_thermal_neutrinos, current_guess)
 
             computed += 1
             current_guess = _store_result(data, idx, Qs, current_guess)
@@ -326,6 +430,7 @@ def compute_Qstar_table_trapped(hadronic_table, params,
                                 electric_charge_neutrality,
                                 include_photons=True, include_gluons=True,
                                 include_thermal_neutrinos=True,
+                                quark_phase='unpaired', Delta0=None,
                                 initial_guess=None, verbose=False):
     """
     Parameters
@@ -371,9 +476,14 @@ def compute_Qstar_table_trapped(hadronic_table, params,
                     mu_nu=d['mu_nu'][i_nB, i_YL, i_T],
                 )
 
-                Qs = solve_Qstar(H, params, electric_charge_neutrality,
-                                 include_photons, include_gluons,
-                                 include_thermal_neutrinos, current_guess)
+                if quark_phase == 'cfl':
+                    Qs = solve_Qstar_cfl(H, params, Delta0, electric_charge_neutrality,
+                                         include_photons, include_gluons,
+                                         include_thermal_neutrinos, current_guess)
+                else:
+                    Qs = solve_Qstar(H, params, electric_charge_neutrality,
+                                     include_photons, include_gluons,
+                                     include_thermal_neutrinos, current_guess)
 
                 computed += 1
                 current_guess = _store_result(data, idx, Qs, current_guess)
@@ -398,6 +508,7 @@ def compute_Qstar_table_fixedYC(hadronic_table, params,
                                 electric_charge_neutrality,
                                 include_photons=True, include_gluons=True,
                                 include_thermal_neutrinos=True,
+                                quark_phase='unpaired', Delta0=None,
                                 initial_guess=None, verbose=False):
     """
     Parameters
@@ -441,9 +552,14 @@ def compute_Qstar_table_fixedYC(hadronic_table, params,
                     mu_nu=0.0,
                 )
 
-                Qs = solve_Qstar(H, params, electric_charge_neutrality,
-                                 include_photons, include_gluons,
-                                 include_thermal_neutrinos, current_guess)
+                if quark_phase == 'cfl':
+                    Qs = solve_Qstar_cfl(H, params, Delta0, electric_charge_neutrality,
+                                         include_photons, include_gluons,
+                                         include_thermal_neutrinos, current_guess)
+                else:
+                    Qs = solve_Qstar(H, params, electric_charge_neutrality,
+                                     include_photons, include_gluons,
+                                     include_thermal_neutrinos, current_guess)
 
                 computed += 1
                 current_guess = _store_result(data, idx, Qs, current_guess)
