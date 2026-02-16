@@ -1,30 +1,27 @@
 """
-General nucleation functions for the hadron-to-quark phase transition.
+Classical Nucleation Theory (CNT) for the hadron-to-quark phase transition.
 
-Computes critical droplet properties and thermal nucleation rates
-using Classical Nucleation Theory (CNT).
+Composable functions for computing nucleation observables:
 
-All functions take two phase objects (Qs, H) that must provide the
-following attributes:
+    driving_force         -> Delta_F_bulk
+    critical_radius       -> R_c = 2 sigma / Delta_F
+    critical_work         -> W_c = 16 pi sigma^3 / (3 Delta_F^2)
+    critical_radius_coulomb -> R_c with Coulomb (numerical root-finding)
+    work_of_formation     -> W(R) at arbitrary radius
+    nucleation_rate       -> Gamma = kappa/(2pi) Omega_0 exp(-W_c/T)
+    nucleation_time       -> tau = 1/(V Gamma)
 
-    Required:  P_total, e_total, n_B, T,
-               mu_B, mu_C, mu_S, mu_e
-    Optional:  mu_nu  (default 0)
-               Y_C, Y_S, Y_e, Y_nu
+Coulomb correction functions (uniform-charge-sphere model):
 
-Functions
----------
-work_of_formation     : W(R) at given radius (includes driving force, Eq. 4.35)
-critical_radius       : R_c
-critical_work         : W*(R_c) energy barrier
-shear_viscosity       : eta(n_B, T)
-statistical_prefactor : Omega_0
-dynamical_prefactor   : kappa
-nucleation_rate       : Gamma_th per unit volume
-nucleation_time       : tau_th = 1/(V Gamma)
+    coulomb_delta_mu_e    -> Coulomb shift to electron chemical potential
+    coulomb_delta_P       -> Coulomb correction to pressure balance
+    coulomb_P             -> Coulomb contribution to pressure
+    coulomb_W             -> Coulomb contribution to work of formation
 """
 
 import numpy as np
+from scipy.optimize import brentq
+from eos.general.physics_constants import alpha_EM, hc
 
 
 # =============================================================================
@@ -35,40 +32,123 @@ XI_Q = 0.7   # quark correlation length (fm)
 
 
 # =============================================================================
-# Work of formation 
+# Coulomb correction terms (uniform-charge-sphere model)
 # =============================================================================
-def work_of_formation(R, Qs, H, sigma, include_coulomb_energy=False):
+def coulomb_delta_mu_e(R, delta_n_C):
     """
-    Work of formation of a quark droplet of radius R.
+    Coulomb correction to electron chemical potential.
 
-    W(R) = -4/3 pi R^3 Delta_F_bulk + 4 pi R^2 sigma + W_Coulomb
+    delta_mu_e = (8/5) alpha_em pi hbar*c R^2 delta_n_C
 
-    Assuming a small droplet with respect to the total accessible volume and
-    assuming the quark free energy can be described as bulk + finite size effects:
-    
-    Delta_F_bulk = (P_Qs - P_H) - n_B_Qs * sum_i Y_i^Qs (mu_i^Qs - mu_i^H)
-
-    with i = B, C, S, e, nu  and  Y_B = 1 by definition.
-
-    For the saddlepoint and frozen flavor solvers the saddle-point condition on n_B
-    makes the chemical-potential sum vanish, so Delta_F = P_Qs - P_H.
-
+    Parameters
     ----------
     R : float or array
         Droplet radius (fm).
-    Qs : object
-        Q* phase state with attributes:
-        n_B, T, mu_B, mu_C, mu_S, mu_e, mu_nu, Y_C, Y_S, Y_e, Y_nu, P_total, e_total, s_total
-    H : object
-        Hadronic phase state with attributes:
-        n_B, T, mu_B, mu_C, mu_S, mu_e, mu_nu, Y_C, Y_S, Y_e, Y_nu, P_total, e_total, s_total
-    sigma : float
-        Surface tension (MeV/fm^2).
+    delta_n_C : float or array
+        Net charge density n_C_Q - n_e_Q (fm^-3).
 
     Returns
     -------
     float or array
-        Work of formation W (MeV).
+        Correction to mu_e (MeV).
+    """
+    return (8.0 / 5.0) * alpha_EM * np.pi * hc * R**2 * delta_n_C
+
+
+def coulomb_delta_P(R, delta_n_C):
+    """
+    Coulomb correction to pressure balance (appears in dW/dR = 0).
+
+    delta_P = (4/15) alpha_em pi hbar*c R^2 delta_n_C^2
+
+    Parameters
+    ----------
+    R : float or array
+        Droplet radius (fm).
+    delta_n_C : float or array
+        Net charge density (fm^-3).
+
+    Returns
+    -------
+    float or array
+        Pressure correction (MeV/fm^3).
+    """
+    return (4.0 / 15.0) * alpha_EM * np.pi * hc * R**2 * delta_n_C**2
+
+
+def coulomb_P(R, delta_n_C):
+    """
+    Coulomb contribution to pressure: -dE_Coul/dV at fixed n_i.
+
+    P_Coul = -(4/3) alpha_em pi hbar*c R^2 delta_n_C^2
+
+    Not used in the standard nucleation pipeline. Provided for
+    thermodynamic consistency checks.
+
+    Parameters
+    ----------
+    R : float or array
+        Droplet radius (fm).
+    delta_n_C : float or array
+        Net charge density (fm^-3).
+
+    Returns
+    -------
+    float or array
+        Coulomb pressure contribution (MeV/fm^3).
+    """
+    return -(4.0 / 3.0) * alpha_EM * np.pi * hc * R**2 * delta_n_C**2
+
+
+def coulomb_W(R, delta_n_C):
+    """
+    Coulomb contribution to the work of formation.
+
+    W_Coulomb = -(16/15) pi^2 hbar*c alpha_em delta_n_C^2 R^5
+
+    Parameters
+    ----------
+    R : float or array
+        Droplet radius (fm).
+    delta_n_C : float or array
+        Net charge density (fm^-3).
+
+    Returns
+    -------
+    float or array
+        Coulomb contribution to W (MeV).
+    """
+    return -(16.0 / 15.0) * np.pi**2 * hc * alpha_EM * delta_n_C**2 * R**5
+
+
+# =============================================================================
+# Bulk driving force (single source of truth)
+# =============================================================================
+def driving_force(Qs, H):
+    """
+    Bulk driving force for nucleation.
+
+    Delta_F_bulk = (P_Qs - P_H) - n_B_Qs * sum_i Y_i^Qs (mu_i^Qs - mu_i^H)
+
+    where i = B, C, S, e, nu and Y_B = 1 by definition.
+
+    For the saddlepoint solver with GCN (no Coulomb), the equilibrium
+    conditions make the chemical-potential sum vanish, so
+    Delta_F_bulk = P_Qs - P_H.
+
+    Parameters
+    ----------
+    Qs : namespace
+        Q* phase state. Required attributes:
+        P_total, n_B, mu_B, mu_C, mu_S, mu_e, mu_nu, Y_C, Y_S, Y_e, Y_nu.
+    H : namespace
+        Hadronic phase state. Required attributes:
+        P_total, mu_B, mu_C, mu_S, mu_e, mu_nu.
+
+    Returns
+    -------
+    float or ndarray
+        Bulk driving force (MeV/fm^3). Positive when quark phase is favored.
     """
     Delta_P = Qs.P_total - H.P_total
     chem_sum = (
@@ -78,97 +158,137 @@ def work_of_formation(R, Qs, H, sigma, include_coulomb_energy=False):
         + Qs.Y_e * (Qs.mu_e - H.mu_e)
         + Qs.Y_nu * (Qs.mu_nu - H.mu_nu)
     )
-    
-    W_bulk = -4.0 / 3.0 * np.pi * R**3 * (Delta_P - Qs.n_B * chem_sum)
-
-    W_surface = 4.0 * np.pi * R**2 * sigma
-
-    if include_coulomb_energy:
-        W_Coulomb = W_coulomb_energy(R, Qs, H)
-    else:
-        W_Coulomb = 0.0
-
-    return W_bulk + W_surface + W_Coulomb
+    return Delta_P - Qs.n_B * chem_sum
 
 
 # =============================================================================
-# Critical radius
+# Critical radius (standard CNT, no Coulomb)
 # =============================================================================
-def critical_radius_standard(Qs, H, sigma):
+def critical_radius(Delta_F_bulk, sigma):
     """
-    Critical droplet radius.
+    Critical droplet radius (standard CNT, no Coulomb).
 
     R_c = 2 sigma / Delta_F_bulk
 
-    where Delta_F_bulk is the general bulk driving force.
-
-    Only defined when Delta_F_bulk > 0 (metastable region).
-
+    Parameters
     ----------
-    Qs : object
-        Q* phase state with attributes:
-        n_B, T, mu_B, mu_C, mu_S, mu_e, mu_nu, Y_C, Y_S, Y_e, Y_nu, P_total, e_total, s_total
-    H : object
-        Hadronic phase state with attributes:
-        n_B, T, mu_B, mu_C, mu_S, mu_e, mu_nu, Y_C, Y_S, Y_e, Y_nu, P_total, e_total, s_total
+    Delta_F_bulk : float or ndarray
+        Bulk driving force (MeV/fm^3).
     sigma : float
         Surface tension (MeV/fm^2).
 
     Returns
     -------
-    float or array
+    float or ndarray
         Critical radius R_c (fm). NaN where Delta_F_bulk <= 0.
     """
-    Delta_P = Qs.P_total - H.P_total
-    chem_sum = (
-        1.0 * (Qs.mu_B - H.mu_B)
-        + Qs.Y_C * (Qs.mu_C - H.mu_C)
-        + Qs.Y_S * (Qs.mu_S - H.mu_S)
-        + Qs.Y_e * (Qs.mu_e - H.mu_e)
-        + Qs.Y_nu * (Qs.mu_nu - H.mu_nu)
-    )
-    Delta_F_bulk = np.asarray(Delta_P - Qs.n_B * chem_sum, dtype=float)
+    Delta_F_bulk = np.asarray(Delta_F_bulk, dtype=float)
     return np.where(Delta_F_bulk > 0, 2.0 * sigma / Delta_F_bulk, np.nan)
 
 
 # =============================================================================
-# Critical work (energy barrier, without Coulomb)
+# Critical work (standard CNT, no Coulomb)
 # =============================================================================
-def critical_work_standard(Qs, H, sigma):
+def critical_work(Delta_F_bulk, sigma):
     """
-    Work of formation at the critical radius (without Coulomb).
+    Energy barrier at the critical radius (standard CNT, no Coulomb).
 
     W_c = 16 pi sigma^3 / (3 Delta_F_bulk^2)
 
-    where Delta_F_bulk is the general bulk driving force (Eq. 4.35).
-
-    Only defined when Delta_F_bulk > 0 (metastable region).
-
+    Parameters
     ----------
-    Qs : object
-        Q* phase state with attributes:
-        n_B, T, mu_B, mu_C, mu_S, mu_e, mu_nu, Y_C, Y_S, Y_e, Y_nu, P_total, e_total, s_total
-    H : object
-        Hadronic phase state with attributes:
-        n_B, T, mu_B, mu_C, mu_S, mu_e, mu_nu, Y_C, Y_S, Y_e, Y_nu, P_total, e_total, s_total
+    Delta_F_bulk : float or ndarray
+        Bulk driving force (MeV/fm^3).
     sigma : float
         Surface tension (MeV/fm^2).
 
     Returns
     -------
-    float or array
+    float or ndarray
         Critical work W_c (MeV). NaN where Delta_F_bulk <= 0.
     """
-    Delta_P = Qs.P_total - H.P_total
-    chem_sum = (
-        1.0 * (Qs.mu_B - H.mu_B)
-        + Qs.Y_C * (Qs.mu_C - H.mu_C)
-        + Qs.Y_S * (Qs.mu_S - H.mu_S)
-        + Qs.Y_e * (Qs.mu_e - H.mu_e)
-        + Qs.Y_nu * (Qs.mu_nu - H.mu_nu)
+    Delta_F_bulk = np.asarray(Delta_F_bulk, dtype=float)
+    return np.where(
+        Delta_F_bulk > 0,
+        16.0 * np.pi * sigma**3 / (3.0 * Delta_F_bulk**2),
+        np.nan,
     )
-    Delta_F_bulk = np.asarray(Delta_P - Qs.n_B * chem_sum, dtype=float)
-    return np.where(Delta_F_bulk > 0, 16.0 * np.pi * sigma**3 / (3.0 * Delta_F_bulk**2), np.nan)
+
+
+# =============================================================================
+# Critical radius with Coulomb correction (post-hoc)
+# =============================================================================
+def critical_radius_coulomb(Delta_F_bulk, sigma, delta_n_C):
+    """
+    Critical radius including Coulomb correction.
+
+    Solves dW/dR = 0 where W = bulk + surface + Coulomb:
+
+        -4 pi R^2 Delta_F + 8 pi R sigma
+        - (16/3) pi^2 hbar*c alpha_em delta_n_C^2 R^4 = 0
+
+    Parameters
+    ----------
+    Delta_F_bulk : float
+        Bulk driving force (MeV/fm^3). Scalar.
+    sigma : float
+        Surface tension (MeV/fm^2).
+    delta_n_C : float
+        Net charge density n_C_Q - n_e_Q (fm^-3). Scalar.
+
+    Returns
+    -------
+    float
+        Critical radius R_c (fm). NaN if no solution.
+    """
+    if Delta_F_bulk <= 0 or np.isnan(Delta_F_bulk):
+        return np.nan
+
+    def dW_dR(R):
+        return (-4.0 * np.pi * R**2 * Delta_F_bulk
+                + 8.0 * np.pi * R * sigma
+                - (16.0 / 3.0) * np.pi**2 * hc * alpha_EM
+                * delta_n_C**2 * R**4)
+
+    R_standard = 2.0 * sigma / Delta_F_bulk
+    try:
+        R_c = brentq(dW_dR, 1e-6, 5.0 * R_standard)
+    except ValueError:
+        return np.nan
+    return R_c
+
+
+# =============================================================================
+# Work of formation at arbitrary radius
+# =============================================================================
+def work_of_formation(R, Delta_F_bulk, sigma, delta_n_C=0.0):
+    """
+    Work of formation of a quark droplet at radius R.
+
+    W(R) = -4/3 pi R^3 Delta_F_bulk + 4 pi R^2 sigma + W_Coulomb(R)
+
+    When delta_n_C = 0, the Coulomb term vanishes (standard CNT).
+
+    Parameters
+    ----------
+    R : float or ndarray
+        Droplet radius (fm).
+    Delta_F_bulk : float or ndarray
+        Bulk driving force (MeV/fm^3).
+    sigma : float
+        Surface tension (MeV/fm^2).
+    delta_n_C : float or ndarray, optional
+        Net charge density (fm^-3). Default 0 (no Coulomb).
+
+    Returns
+    -------
+    float or ndarray
+        Work of formation W(R) (MeV).
+    """
+    W_bulk = -4.0 / 3.0 * np.pi * R**3 * Delta_F_bulk
+    W_surface = 4.0 * np.pi * R**2 * sigma
+    W_coul = coulomb_W(R, delta_n_C)
+    return W_bulk + W_surface + W_coul
 
 
 # =============================================================================
@@ -246,12 +366,10 @@ def dynamical_prefactor(sigma, R_c, H, Qs, T,
         Surface tension (MeV/fm^2).
     R_c : float or array
         Critical radius (fm).
-    H : object
-        Hadronic phase state with attributes:
-        n_B, T, mu_B, mu_C, mu_S, mu_e, mu_nu, Y_C, Y_S, Y_e, Y_nu, P_total, e_total, s_total
-    Qs : object
-        Q* phase state with attributes:
-        n_B, T, mu_B, mu_C, mu_S, mu_e, mu_nu, Y_C, Y_S, Y_e, Y_nu, P_total, e_total, s_total
+    H : namespace
+        Hadronic phase state. Required: n_B, P_total, e_total.
+    Qs : namespace
+        Q* phase state. Required: P_total, e_total.
     T : float or array
         Temperature (MeV).
     lambda_th : float, optional
@@ -273,8 +391,8 @@ def dynamical_prefactor(sigma, R_c, H, Qs, T,
 # =============================================================================
 # Nucleation rate
 # =============================================================================
-def nucleation_rate(Qs, H, sigma,
-                    xi_q=XI_Q, lambda_th=0.0, zeta_th=0.0, type_coulomb="no"):
+def nucleation_rate(W_c, R_c, sigma, T, H, Qs,
+                    xi_q=XI_Q, lambda_th=0.0, zeta_th=0.0):
     """
     Thermal nucleation rate per unit volume.
 
@@ -282,41 +400,39 @@ def nucleation_rate(Qs, H, sigma,
 
     Parameters
     ----------
-    Qs : object
-        Q* phase state (P_total, e_total, n_B, mu_B, ...).
-    H : object
-        Hadronic phase state (P_total, e_total, n_B, T, mu_B, ...).
+    W_c : float or ndarray
+        Critical work / energy barrier (MeV). Pre-computed.
+    R_c : float or ndarray
+        Critical radius (fm). Pre-computed.
     sigma : float
         Surface tension (MeV/fm^2).
+    T : float or ndarray
+        Temperature (MeV).
+    H : namespace
+        Hadronic phase state. Required: n_B, P_total, e_total.
+    Qs : namespace
+        Q* phase state. Required: P_total, e_total.
     xi_q : float, optional
         Quark correlation length (fm). Default 0.7.
     lambda_th : float, optional
         Thermal conductivity. Default 0.
     zeta_th : float, optional
         Bulk viscosity. Default 0.
-    type_coulomb : str, optional
-        Type of Coulomb interaction: "no" (no Coulomb), "only_in_W" (only in W), "minimization" (in W and in chemical minimization), "screening" (electron screening).
 
     Returns
     -------
-    float or array
-        Nucleation rate Gamma (fm^{-3} s^{-1}). NaN where Delta_F <= 0.
+    float or ndarray
+        Nucleation rate Gamma (fm^{-3} s^{-1}).
     """
-    R_c = critical_radius(Qs, H, sigma, type_coulomb=type_coulomb) 
-    W_c = critical_work(Qs, H, sigma, type_coulomb=type_coulomb)
-
-    Omega_0 = statistical_prefactor(sigma, H.T, R_c, xi_q)
-    kappa = dynamical_prefactor(sigma, R_c, H, Qs, H.T,
-                                lambda_th, zeta_th)
-
-    return kappa / (2.0 * np.pi) * Omega_0 * np.exp(-W_c / H.T)
+    Omega_0 = statistical_prefactor(sigma, T, R_c, xi_q)
+    kappa = dynamical_prefactor(sigma, R_c, H, Qs, T, lambda_th, zeta_th)
+    return kappa / (2.0 * np.pi) * Omega_0 * np.exp(-W_c / T)
 
 
 # =============================================================================
 # Nucleation time
 # =============================================================================
-def nucleation_time(Qs, H, sigma, V,
-                    xi_q=XI_Q, lambda_th=0.0, zeta_th=0.0, type_coulomb="no"):
+def nucleation_time(Gamma, V):
     """
     Nucleation waiting time.
 
@@ -324,19 +440,14 @@ def nucleation_time(Qs, H, sigma, V,
 
     Parameters
     ----------
-    Qs, H, sigma :
-        Same as nucleation_rate.
+    Gamma : float or ndarray
+        Nucleation rate (fm^{-3} s^{-1}).
     V : float
         System volume (fm^3).
-    xi_q, lambda_th, zeta_th :
-        Same as nucleation_rate.
-    type_coulomb : str, optional
-        Type of Coulomb interaction: "no" (no Coulomb), "only_in_W" (only in W), "minimization" (in W and in chemical minimization), "screening" (electron screening).
 
     Returns
     -------
-    float or array
-        Nucleation time tau (s). NaN where rate is undefined.
+    float or ndarray
+        Nucleation time tau (s).
     """
-    Gamma = nucleation_rate(Qs, H, sigma, xi_q, lambda_th, zeta_th, type_coulomb=type_coulomb)
     return 1.0 / (V * Gamma)

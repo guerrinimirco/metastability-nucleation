@@ -5,35 +5,47 @@ Nucleation Observables Wrapper
 High-level function that computes nucleation observables (R_c, W_c, Gamma, tau)
 for the hadron-to-quark phase transition.
 
-Supports four electric charge modes:
+Two independent parameters control the Q* solver:
 
-    lcn_standard      : Local charge neutrality (frozen solver), no Coulomb
-    gcn_standard      : Global charge neutrality (saddlepoint solver), no Coulomb
-    gcn_coulomb       : GCN saddlepoint solver (no Coulomb in equations),
-                        Coulomb energy added post-hoc to W(R), R_c from findroot
-    coulomb_minimize  : Full Coulomb minimization via solve_Qstar_coulomb
-                        (R is part of the unknowns)
+    flavor_mode:
+        frozen       : Flavor fractions frozen from the hadronic phase
+        saddlepoint  : Flavor fractions minimized (saddlepoint approximation)
+
+    electric_charge_mode:
+        lcn              : Local charge neutrality, no Coulomb
+        gcn              : Global charge neutrality, no Coulomb
+        gcn_coulomb      : GCN solver (no Coulomb in equations),
+                           Coulomb energy added post-hoc to W(R), R_c from findroot
+        coulomb_minimize : Full Coulomb minimization via solve_Qstar_coulomb
+                           (R is part of the unknowns)
+
+Constraints:
+    - frozen only supports 'lcn' and 'gcn' (no Coulomb modes, no CFL)
+    - saddlepoint supports all four electric charge modes
 
 Usage
 -----
 >>> from nucleation.compute_nucleation import compute_nucleation_observables
 >>> result = compute_nucleation_observables(
-...     hadronic_table, params=my_params,
+...     hadronic_table,
+...     params=my_params,
 ...     sigma=30.0, V=1e39,
-...     electric_charge_mode='gcn_standard',
+...     flavor_mode='saddlepoint',
+...     electric_charge_mode='gcn',
 ... )
 >>> print(result.R_c, result.tau)
 """
 
 import numpy as np
 from types import SimpleNamespace
-from scipy.optimize import brentq
 from dataclasses import dataclass
 
-from nucleation.Qstar.Qstar_saddlepoint_coulomb_solver import coulomb_W
-from eos.general.physics_constants import alpha_EM, hc
 from nucleation.general.general_nucleation import (
-    statistical_prefactor, dynamical_prefactor,
+    driving_force,
+    critical_radius, critical_work,
+    critical_radius_coulomb,
+    work_of_formation,
+    nucleation_rate, nucleation_time,
 )
 
 
@@ -50,18 +62,20 @@ class NucleationObservables:
         Equilibrium type ('betaeq', 'trapped', 'fixedYC').
     hadronic_grids : dict
         Input grids (n_B_H, T, Y_L_H, etc.).
+    flavor_mode : str
+        Flavor mode used ('frozen' or 'saddlepoint').
     electric_charge_mode : str
-        Mode used for computation.
+        Electric charge mode used ('lcn', 'gcn', 'gcn_coulomb', 'coulomb_minimize').
     sigma : float
-        Surface tension (MeV/fm²).
+        Surface tension (MeV/fm^2).
     V : float
-        System volume (fm³).
+        System volume (fm^3).
     R_c : np.ndarray
         Critical radius (fm).
     W_c : np.ndarray
         Critical work / energy barrier (MeV).
     Gamma : np.ndarray
-        Nucleation rate (fm⁻³ s⁻¹).
+        Nucleation rate (fm^{-3} s^{-1}).
     tau : np.ndarray
         Nucleation time (s).
     Qstar_table : object
@@ -69,6 +83,7 @@ class NucleationObservables:
     """
     eq_type: str
     hadronic_grids: dict
+    flavor_mode: str
     electric_charge_mode: str
     sigma: float
     V: float
@@ -80,54 +95,14 @@ class NucleationObservables:
 
 
 # =============================================================================
-# Helper: Coulomb post-hoc critical radius
-# =============================================================================
-def _critical_radius_coulomb_posthoc(Delta_F_bulk, sigma, delta_n_C):
-    """
-    Find critical radius including Coulomb correction (post-hoc).
-
-    Solves dW/dR = 0 where W includes bulk + surface + Coulomb:
-
-        -4 pi R^2 Delta_F + 8 pi R sigma
-        - (16/3) pi^2 hbar*c alpha_em delta_n_C^2 R^4 = 0
-
-    Parameters
-    ----------
-    Delta_F_bulk : float
-        Bulk driving force (MeV/fm³).
-    sigma : float
-        Surface tension (MeV/fm²).
-    delta_n_C : float
-        Net charge density n_C_Q - n_e_Q (fm⁻³).
-
-    Returns
-    -------
-    float
-        Critical radius R_c (fm). NaN if no solution.
-    """
-    if Delta_F_bulk <= 0 or np.isnan(Delta_F_bulk):
-        return np.nan
-
-    def dW_dR(R):
-        return (-4.0 * np.pi * R**2 * Delta_F_bulk
-                + 8.0 * np.pi * R * sigma
-                - (16.0 / 3.0) * np.pi**2 * hc * alpha_EM
-                * delta_n_C**2 * R**4)
-
-    R_standard = 2.0 * sigma / Delta_F_bulk
-    try:
-        R_c = brentq(dW_dR, 1e-6, 5.0 * R_standard)
-    except ValueError:
-        return np.nan
-    return R_c
-
-
-# =============================================================================
 # Helper: build H and Qs SimpleNamespace from table data
 # =============================================================================
 def _build_phase_namespaces(hadronic_table, q_d, shape):
     """
     Build array-based H and Qs SimpleNamespace objects from table data.
+
+    These namespaces provide the interface expected by general_nucleation
+    functions (driving_force, dynamical_prefactor, etc.).
 
     Parameters
     ----------
@@ -187,8 +162,6 @@ def _build_phase_namespaces(hadronic_table, q_d, shape):
         e_total=h_d['e_total'],
     )
 
-    # For Q*, mu_nu is shared between phases (passed through in solver),
-    # and Y_nu doesn't affect chem_sum since mu_nu_Qs = mu_nu_H.
     Qs = SimpleNamespace(
         n_B=q_d['n_B'],
         T=T_mesh,
@@ -210,45 +183,22 @@ def _build_phase_namespaces(hadronic_table, q_d, shape):
 
 
 # =============================================================================
-# Helper: compute bulk driving force
-# =============================================================================
-def _compute_Delta_F_bulk(Qs, H):
-    """
-    Compute the general bulk driving force.
-
-    Delta_F_bulk = (P_Qs - P_H) - n_B_Qs * sum_i Y_i^Qs (mu_i^Qs - mu_i^H)
-
-    For the saddlepoint solver (GCN, no Coulomb), chem_sum = 0 and
-    Delta_F_bulk = P_Qs - P_H.
-    """
-    Delta_P = Qs.P_total - H.P_total
-    chem_sum = (
-        1.0 * (Qs.mu_B - H.mu_B)
-        + Qs.Y_C * (Qs.mu_C - H.mu_C)
-        + Qs.Y_S * (Qs.mu_S - H.mu_S)
-        + Qs.Y_e * (Qs.mu_e - H.mu_e)
-        + Qs.Y_nu * (Qs.mu_nu - H.mu_nu)
-    )
-    return Delta_P - Qs.n_B * chem_sum
-
-
-# =============================================================================
 # Helper: dispatch Q* solver
 # =============================================================================
 def _compute_Qstar(hadronic_table, params, sigma,
-                   quark_phase, Delta0, electric_charge_mode,
+                   quark_phase, Delta0,
+                   flavor_mode, electric_charge_mode,
                    include_photons, include_gluons, include_thermal_neutrinos,
                    initial_guess, verbose):
-    """Dispatch to appropriate Q* solver based on electric_charge_mode."""
+    """Dispatch to appropriate Q* solver based on flavor_mode and electric_charge_mode."""
 
-    if electric_charge_mode == 'lcn_standard':
-        if quark_phase == 'cfl':
-            raise ValueError("lcn_standard does not support quark_phase='cfl'. "
-                             "Use gcn_standard or coulomb_minimize.")
+    charge_neutrality = 'local' if electric_charge_mode == 'lcn' else 'global'
+
+    if flavor_mode == 'frozen':
         from nucleation.Qstar.Qstar_frozen_solver import compute_Qstar_table
         return compute_Qstar_table(
             hadronic_table, params,
-            electric_charge_neutrality='local',
+            electric_charge_neutrality=charge_neutrality,
             include_photons=include_photons,
             include_gluons=include_gluons,
             include_thermal_neutrinos=include_thermal_neutrinos,
@@ -256,11 +206,12 @@ def _compute_Qstar(hadronic_table, params, sigma,
             verbose=verbose,
         )
 
-    elif electric_charge_mode in ('gcn_standard', 'gcn_coulomb'):
+    # saddlepoint modes
+    if electric_charge_mode in ('lcn', 'gcn', 'gcn_coulomb'):
         from nucleation.Qstar.Qstar_saddlepoint_solver import compute_Qstar_table
         return compute_Qstar_table(
             hadronic_table, params,
-            electric_charge_neutrality='global',
+            electric_charge_neutrality=charge_neutrality,
             include_photons=include_photons,
             include_gluons=include_gluons,
             include_thermal_neutrinos=include_thermal_neutrinos,
@@ -270,41 +221,38 @@ def _compute_Qstar(hadronic_table, params, sigma,
             verbose=verbose,
         )
 
-    elif electric_charge_mode == 'coulomb_minimize':
-        from nucleation.Qstar.Qstar_saddlepoint_coulomb_solver import (
-            compute_Qstar_coulomb_table_betaeq,
-            compute_Qstar_coulomb_table_trapped,
+    # coulomb_minimize
+    from nucleation.Qstar.Qstar_saddlepoint_coulomb_solver import (
+        compute_Qstar_coulomb_table_betaeq,
+        compute_Qstar_coulomb_table_trapped,
+    )
+    eq_type = hadronic_table.eq_type
+    if eq_type == 'beta_eq':
+        return compute_Qstar_coulomb_table_betaeq(
+            hadronic_table, params, sigma,
+            include_photons=include_photons,
+            include_gluons=include_gluons,
+            include_thermal_neutrinos=include_thermal_neutrinos,
+            quark_phase=quark_phase,
+            Delta0=Delta0,
+            initial_guess=initial_guess,
+            verbose=verbose,
         )
-        eq_type = hadronic_table.eq_type
-        if eq_type == 'beta_eq':
-            return compute_Qstar_coulomb_table_betaeq(
-                hadronic_table, params, sigma,
-                include_photons=include_photons,
-                include_gluons=include_gluons,
-                include_thermal_neutrinos=include_thermal_neutrinos,
-                quark_phase=quark_phase,
-                Delta0=Delta0,
-                initial_guess=initial_guess,
-                verbose=verbose,
-            )
-        elif eq_type == 'trapped_neutrinos':
-            return compute_Qstar_coulomb_table_trapped(
-                hadronic_table, params, sigma,
-                include_photons=include_photons,
-                include_gluons=include_gluons,
-                include_thermal_neutrinos=include_thermal_neutrinos,
-                quark_phase=quark_phase,
-                Delta0=Delta0,
-                initial_guess=initial_guess,
-                verbose=verbose,
-            )
-        else:
-            raise ValueError(
-                f"coulomb_minimize not supported for eq_type '{eq_type}'. "
-                f"Only 'beta_eq' and 'trapped_neutrinos' are supported.")
-
+    elif eq_type == 'trapped_neutrinos':
+        return compute_Qstar_coulomb_table_trapped(
+            hadronic_table, params, sigma,
+            include_photons=include_photons,
+            include_gluons=include_gluons,
+            include_thermal_neutrinos=include_thermal_neutrinos,
+            quark_phase=quark_phase,
+            Delta0=Delta0,
+            initial_guess=initial_guess,
+            verbose=verbose,
+        )
     else:
-        raise ValueError(f"Unknown electric_charge_mode: '{electric_charge_mode}'")
+        raise ValueError(
+            f"coulomb_minimize not supported for eq_type '{eq_type}'. "
+            f"Only 'beta_eq' and 'trapped_neutrinos' are supported.")
 
 
 # =============================================================================
@@ -315,10 +263,11 @@ def compute_nucleation_observables(
     params=None,
     Qstar_table=None,
     sigma=30.0,
-    V=1e39,
+    V=4.18879e51,  # sphere with radius 100 m in fm^3
     quark_phase='unpaired',
     Delta0=None,
-    electric_charge_mode='gcn_standard',
+    flavor_mode='saddlepoint',
+    electric_charge_mode='gcn',
     include_photons=True,
     include_gluons=True,
     include_thermal_neutrinos=True,
@@ -345,17 +294,21 @@ def compute_nucleation_observables(
     Qstar_table : QstarTableData or None
         Pre-computed Q* table. If None, computed internally using params.
     sigma : float
-        Surface tension (MeV/fm²).
+        Surface tension (MeV/fm^2).
     V : float
-        System volume (fm³) for nucleation time.
+        System volume (fm^3) for nucleation time. Default: sphere with R=100 m.
     quark_phase : str
         'unpaired' or 'cfl'.
     Delta0 : float or None
         CFL pairing gap (MeV). Required if quark_phase='cfl'.
+    flavor_mode : str
+        'frozen'       : Flavor fractions frozen from hadronic phase.
+        'saddlepoint'  : Minimization of W with respect to flavor composition.
+        frozen only supports 'lcn' and 'gcn', no CFL.
     electric_charge_mode : str
-        'lcn_standard'     : Local CN (frozen solver), no Coulomb.
-        'gcn_standard'     : Global CN (saddlepoint), no Coulomb.
-        'gcn_coulomb'      : GCN saddlepoint, Coulomb added post-hoc to W(R).
+        'lcn'              : Local charge neutrality, no Coulomb.
+        'gcn'              : Global charge neutrality, no Coulomb.
+        'gcn_coulomb'      : GCN solver, Coulomb added post-hoc to W(R).
         'coulomb_minimize' : Full Coulomb minimization (R is unknown).
     include_photons, include_gluons, include_thermal_neutrinos : bool
         Include contributions in quark EOS.
@@ -374,23 +327,36 @@ def compute_nucleation_observables(
     -------
     NucleationObservables
     """
-    valid_modes = ['lcn_standard', 'gcn_standard',
-                   'gcn_coulomb', 'coulomb_minimize']
-    if electric_charge_mode not in valid_modes:
+    # ---- Validate inputs ----
+    valid_flavor = ('frozen', 'saddlepoint')
+    valid_charge = ('lcn', 'gcn', 'gcn_coulomb', 'coulomb_minimize')
+    if flavor_mode not in valid_flavor:
+        raise ValueError(
+            f"Invalid flavor_mode: '{flavor_mode}'. Valid: {list(valid_flavor)}")
+    if electric_charge_mode not in valid_charge:
         raise ValueError(
             f"Invalid electric_charge_mode: '{electric_charge_mode}'. "
-            f"Valid: {valid_modes}")
+            f"Valid: {list(valid_charge)}")
+    if flavor_mode == 'frozen':
+        if electric_charge_mode not in ('lcn', 'gcn'):
+            raise ValueError(
+                f"frozen flavor_mode only supports 'lcn' or 'gcn', "
+                f"got '{electric_charge_mode}'")
+        if quark_phase == 'cfl':
+            raise ValueError(
+                "frozen flavor_mode does not support quark_phase='cfl'")
 
     # ---- Step 1: Compute or retrieve Q* table ----
     if Qstar_table is None:
         if params is None:
             raise ValueError("params must be provided when Qstar_table is None")
         if verbose:
-            print(f"Computing Q* table (mode={electric_charge_mode}, "
-                  f"phase={quark_phase})...")
+            print(f"Computing Q* table (flavor={flavor_mode}, "
+                  f"charge={electric_charge_mode}, phase={quark_phase})...")
         Qstar_table = _compute_Qstar(
             hadronic_table, params, sigma,
-            quark_phase, Delta0, electric_charge_mode,
+            quark_phase, Delta0,
+            flavor_mode, electric_charge_mode,
             include_photons, include_gluons, include_thermal_neutrinos,
             initial_guess, verbose,
         )
@@ -401,64 +367,46 @@ def compute_nucleation_observables(
     H, Qs = _build_phase_namespaces(hadronic_table, q_d, shape)
     converged = q_d['converged']
 
-    # ---- Step 3: Compute Delta_F_bulk ----
-    Delta_F_bulk = _compute_Delta_F_bulk(Qs, H)
+    # ---- Step 3: Bulk driving force ----
+    Delta_F_bulk = driving_force(Qs, H)
+    Delta_F_masked = np.where(converged, Delta_F_bulk, np.nan)
 
-    # ---- Step 4: Compute R_c and W_c ----
-    if electric_charge_mode in ('lcn_standard', 'gcn_standard'):
-        # Standard CNT formulas (no Coulomb)
-        R_c = np.where(
-            (Delta_F_bulk > 0) & converged,
-            2.0 * sigma / Delta_F_bulk,
-            np.nan,
-        )
-        W_c = np.where(
-            (Delta_F_bulk > 0) & converged,
-            -4.0 / 3.0 * np.pi * R_c**3 * Delta_F_bulk
-            + 4.0 * np.pi * R_c**2 * sigma,
-            np.nan,
-        )
+    # ---- Step 4: Critical radius and critical work ----
+    if electric_charge_mode in ('lcn', 'gcn'):
+        R_c = critical_radius(Delta_F_masked, sigma)
+        W_c = critical_work(Delta_F_masked, sigma)
 
     elif electric_charge_mode == 'gcn_coulomb':
-        # Post-hoc Coulomb: R_c from findroot, W_c includes Coulomb term
         delta_n_C = Qs.Y_C * Qs.n_B - Qs.n_e
         R_c = np.full(shape, np.nan)
-        W_c = np.full(shape, np.nan)
 
         it = np.nditer(Delta_F_bulk, flags=['multi_index'])
         while not it.finished:
             idx = it.multi_index
             if converged[idx]:
-                df = float(Delta_F_bulk[idx])
-                dnc = float(delta_n_C[idx])
-                rc = _critical_radius_coulomb_posthoc(df, sigma, dnc)
-                R_c[idx] = rc
-                if not np.isnan(rc):
-                    W_c[idx] = (
-                        -4.0 / 3.0 * np.pi * rc**3 * df
-                        + 4.0 * np.pi * rc**2 * sigma
-                        + coulomb_W(rc, dnc)
-                    )
+                R_c[idx] = critical_radius_coulomb(
+                    float(Delta_F_bulk[idx]), sigma, float(delta_n_C[idx]))
             it.iternext()
 
+        W_c = np.where(
+            converged & ~np.isnan(R_c),
+            work_of_formation(R_c, Delta_F_bulk, sigma, delta_n_C),
+            np.nan,
+        )
+
     elif electric_charge_mode == 'coulomb_minimize':
-        # R_c from Coulomb solver table
         R_c = q_d['R_c'].copy()
         delta_n_C = q_d['delta_n_C']
         W_c = np.where(
             converged,
-            -4.0 / 3.0 * np.pi * R_c**3 * Delta_F_bulk
-            + 4.0 * np.pi * R_c**2 * sigma
-            + coulomb_W(R_c, delta_n_C),
+            work_of_formation(R_c, Delta_F_bulk, sigma, delta_n_C),
             np.nan,
         )
 
-    # ---- Step 5: Compute Gamma and tau ----
-    T = H.T
-    Omega_0 = statistical_prefactor(sigma, T, R_c, xi_q)
-    kappa = dynamical_prefactor(sigma, R_c, H, Qs, T, lambda_th, zeta_th)
-    Gamma = kappa / (2.0 * np.pi) * Omega_0 * np.exp(-W_c / T)
-    tau = 1.0 / (V * Gamma)
+    # ---- Step 5: Nucleation rate and time ----
+    Gamma = nucleation_rate(W_c, R_c, sigma, H.T, H, Qs,
+                            xi_q, lambda_th, zeta_th)
+    tau = nucleation_time(Gamma, V)
 
     # ---- Step 6: Build result ----
     eq_type_map = {
@@ -471,6 +419,7 @@ def compute_nucleation_observables(
     return NucleationObservables(
         eq_type=eq_type,
         hadronic_grids=Qstar_table.hadronic_grids,
+        flavor_mode=flavor_mode,
         electric_charge_mode=electric_charge_mode,
         sigma=sigma,
         V=V,

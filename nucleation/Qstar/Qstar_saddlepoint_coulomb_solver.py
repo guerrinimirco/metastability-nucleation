@@ -22,73 +22,9 @@ import numpy as np
 from types import SimpleNamespace
 from scipy.optimize import root
 from eos.alphabag.eos import compute_alphabag_total_thermo_from_mu, compute_cfl_total_thermo_from_mu
-from eos.general.physics_constants import alpha_EM, hc
-
-
-# =============================================================================
-# Coulomb correction terms
-# =============================================================================
-def coulomb_delta_mu_e(R, delta_n_C):
-    """
-    Coulomb correction to electron chemical potential.
-
-    delta_mu_e = 8/5 alpha_em pi hbar*c R^2 delta_n_C # minimization at fixed n_i (and not N_i) 
-
-    Parameters
-    ----------
-    R : float
-        Droplet radius (fm).
-    delta_n_C : float
-        Net charge density n_C_Q - n_e_Q (fm^-3).
-    """
-    return (8.0 / 5.0) * alpha_EM * np.pi * hc* R**2 * delta_n_C
-
-
-def coulomb_delta_P(R, delta_n_C):
-    """
-    Coulomb correction to pressure balance.
-
-    delta_P = 4/15 alpha_em pi hbar*c R^2 delta_n_C^2
-
-    Parameters
-    ----------
-    R : float
-        Droplet radius (fm).
-    delta_n_C : float
-        Net charge density n_C_Q - n_e (fm^-3).
-    """
-    return (4.0 / 15.0) * alpha_EM * np.pi * hc* R**2 * delta_n_C**2
-
-
-def coulomb_P(R, delta_n_C):
-    """
-    Coulomb contribution (-dE_Coul/dV|n_i)
-    P_Coul = -4/3 alpha_em pi hbar*c R^2 delta_n_C^2
-
-    Parameters
-    ----------
-    R : float
-        Droplet radius (fm).
-    delta_n_C : float
-        Net charge density n_C_Q - n_e (fm^-3).
-    """
-    return -(4.0 / 3.0) * alpha_EM * np.pi * hc* R**2 * delta_n_C**2
-
-
-def coulomb_W(R, delta_n_C):
-    """
-    Coulomb contribution to the work of formation.
-
-    W_Coulomb = -16/15 pi^2 hbar*c alpha_em delta_n_C^2 R^5
-
-    Parameters
-    ----------
-    R : float
-        Droplet radius (fm).
-    delta_n_C : float
-        Net charge density n_C_Q - n_e (fm^-3).
-    """
-    return -(16.0 / 15.0) * np.pi**2 * hc* alpha_EM * delta_n_C**2 * R**5
+from nucleation.general.general_nucleation import (
+    coulomb_delta_mu_e, coulomb_delta_P, coulomb_P, coulomb_W,
+)
 
 
 # =============================================================================
