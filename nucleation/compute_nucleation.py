@@ -176,7 +176,6 @@ def _build_phase_namespaces(hadronic_table, q_d, shape):
         mu_nu=mu_nu_H,
         P_total=q_d['P_total'],
         e_total=q_d['e_total'],
-        n_e=q_d.get('n_e', np.full(shape, np.nan)),
     )
 
     return H, Qs
@@ -377,7 +376,7 @@ def compute_nucleation_observables(
         W_c = critical_work(Delta_F_masked, sigma)
 
     elif electric_charge_mode == 'gcn_coulomb':
-        delta_n_C = Qs.Y_C * Qs.n_B - Qs.n_e
+        delta_n_C = (Qs.Y_C - Qs.Y_e) * Qs.n_B
         R_c = np.full(shape, np.nan)
 
         it = np.nditer(Delta_F_bulk, flags=['multi_index'])

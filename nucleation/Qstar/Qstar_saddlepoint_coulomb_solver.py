@@ -83,7 +83,7 @@ def solve_Qstar_coulomb(H, params, sigma,
             mu_nu=H.mu_nu
         )
 
-        delta_n_C = Qs.Y_C * Qs.n_B - Qs.n_e
+        delta_n_C = (Qs.Y_C - Qs.Y_e) * Qs.n_B
 
         eq1 = Qs.mu_B - H.mu_B
         eq2 = Qs.mu_C + mu_e - (H.mu_C + H.mu_e)
@@ -193,7 +193,7 @@ def solve_Qstar_coulomb_at_R(R, H, params, sigma,
             mu_nu=H.mu_nu
         )
 
-        delta_n_C = Qs.Y_C * Qs.n_B - Qs.n_e
+        delta_n_C = (Qs.Y_C - Qs.Y_e) * Qs.n_B
 
         eq1 = Qs.mu_B - H.mu_B
         eq2 = Qs.mu_C + mu_e - (H.mu_C + H.mu_e)
@@ -282,7 +282,7 @@ def solve_Qstar_cfl_coulomb(H, params, Delta0, sigma,
             mu_nu=H.mu_nu
         )
 
-        delta_n_C = Qs.Y_C * Qs.n_B - Qs.n_e
+        delta_n_C = (Qs.Y_C - Qs.Y_e) * Qs.n_B
 
         eq1 = Qs.Y_C                 # = 0
         eq2 = Qs.Y_S - 1.0           # = 0
@@ -391,7 +391,7 @@ def solve_Qstar_cfl_coulomb_at_R(R, H, params, Delta0, sigma,
             mu_nu=H.mu_nu
         )
 
-        delta_n_C = Qs.Y_C * Qs.n_B - Qs.n_e
+        delta_n_C = (Qs.Y_C - Qs.Y_e) * Qs.n_B
 
         eq1 = Qs.Y_C
         eq2 = Qs.Y_S - 1.0
@@ -479,7 +479,7 @@ def work_of_formation_coulomb_at_R(R, H, params, sigma,
     if result is None:
         return None
 
-    delta_n_C = result.Y_C * result.n_B - result.n_e
+    delta_n_C = (result.Y_C - result.Y_e) * result.n_B
 
     W = (-4.0 / 3.0 * np.pi * R**3 * (result.P_total - H.P_total)
          + 4.0 * np.pi * R**2 * sigma
@@ -739,7 +739,7 @@ def _store_coulomb_result(data, idx, sol, current_guess):
         data['s_total'][idx] = Qs.s_total
         data['f_total'][idx] = Qs.f_total
         data['R_c'][idx] = R_c
-        data['delta_n_C'][idx] = Qs.Y_C * Qs.n_B - Qs.n_e
+        data['delta_n_C'][idx] = (Qs.Y_C - Qs.Y_e) * Qs.n_B
         data['converged'][idx] = True
         current_guess = np.array([Qs.mu_u, Qs.mu_d, Qs.mu_s, Qs.mu_e, R_c])
     return current_guess

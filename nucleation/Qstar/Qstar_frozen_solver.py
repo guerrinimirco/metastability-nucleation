@@ -115,8 +115,8 @@ def load_Qstar_table(filepath):
     """
     Load a Q* flavor-frozen table from a .dat file saved by _export_table.
 
-    Backward-compatible: handles files that lack the Y_e / n_e columns
-    (exported before those fields were added).
+    Backward-compatible: handles files that lack the Y_e column
+    (exported before that field was added).
 
     Parameters
     ----------
@@ -163,11 +163,9 @@ def load_Qstar_table(filepath):
             arr = arr.astype(bool)
         data[key] = arr
 
-    # Backward compat: reconstruct Y_e / n_e if absent
+    # Backward compat: reconstruct Y_e if absent
     if 'Y_e' not in data and 'Y_C' in data:
         data['Y_e'] = data['Y_C'].copy()
-    if 'n_e' not in data:
-        data['n_e'] = np.full(shape, np.nan)
 
     return QstarFrozenTableData(
         eq_type=eq_type,
@@ -223,7 +221,7 @@ def solve_Qstar(H, params, electric_charge_neutrality,
             electron_charge_neutrality_equation =  Qs.n_C - e_Qs.n
             Y_e_Qs = e_Qs.n / Qs.n_B
         elif electric_charge_neutrality == "global":
-            electron_charge_neutrality_equation =  e_Qs.mu - H.mu_e
+            electron_charge_neutrality_equation =  mu_e - H.mu_e
             Y_e_Qs = H.Y_e
 
         saddle_point_nBQs_equation = (Qs.mu_B-H.mu_B) + Qs.Y_C * (Qs.mu_C-H.mu_C) + Qs.Y_S * (Qs.mu_S-H.mu_S) + Y_e_Qs * (mu_e-H.mu_e)
@@ -550,7 +548,6 @@ def _init_data(shape):
         'Y_d': np.full(shape, np.nan),
         'Y_s': np.full(shape, np.nan),
         'Y_e': np.full(shape, np.nan),
-        'n_e': np.full(shape, np.nan),
         'P_total': np.full(shape, np.nan),
         'e_total': np.full(shape, np.nan),
         's_total': np.full(shape, np.nan),
@@ -575,7 +572,6 @@ def _store_result(data, idx, Qs, current_guess):
         data['Y_d'][idx] = Qs.Y_d
         data['Y_s'][idx] = Qs.Y_s
         data['Y_e'][idx] = Qs.Y_e
-        data['n_e'][idx] = Qs.n_e
         data['P_total'][idx] = Qs.P_total
         data['e_total'][idx] = Qs.e_total
         data['s_total'][idx] = Qs.s_total
@@ -596,7 +592,7 @@ def _export_table(result, params, electric_charge_neutrality, output_file):
 
     # Output columns (Q* thermodynamic quantities)
     data_keys = ['n_B', 'mu_B', 'mu_C', 'mu_S', 'mu_u', 'mu_d', 'mu_s', 'mu_e',
-                 'Y_C', 'Y_S', 'Y_u', 'Y_d', 'Y_s', 'Y_e', 'n_e',
+                 'Y_C', 'Y_S', 'Y_u', 'Y_d', 'Y_s', 'Y_e',
                  'P_total', 'e_total', 's_total', 'f_total', 'converged']
     output_names = [k + '_Qs' for k in data_keys]
     output_cols = [result.data[k].ravel(order='F') for k in data_keys]
