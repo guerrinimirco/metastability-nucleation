@@ -225,7 +225,7 @@ def solve_Qstar(H, params, electric_charge_neutrality,
         if electric_charge_neutrality == "local":
             electron_charge_neutrality_equation =   Qs.Y_C - Y_e_Qs
         elif electric_charge_neutrality == "global":
-            electron_charge_neutrality_equation =  e_Qs.mu - H.mu_e
+            electron_charge_neutrality_equation =  mu_e - H.mu_e
 
         
         saddle_point_nBQs_equation = (Qs.mu_B-H.mu_B) + Qs.Y_C * (Qs.mu_C-H.mu_C) + Qs.Y_S * (Qs.mu_S-H.mu_S) + Y_e_Qs * (mu_e-H.mu_e)
