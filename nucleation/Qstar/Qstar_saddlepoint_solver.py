@@ -15,7 +15,7 @@ import os
 import numpy as np
 from types import SimpleNamespace
 from scipy.optimize import root
-from eos.alphabag.eos import _build_result, _build_cfl_result
+from eos.alphabag.eos import compute_alphabag_total_thermo_from_mu, compute_cfl_total_thermo_from_mu
 from eos.alphabag.thermodynamics_quarks import compute_alphabag_thermo_from_mu, compute_cfl_thermo_from_mu
 from eos.general.thermodynamics_leptons import electron_thermo, neutrino_thermo
 from dataclasses import dataclass
@@ -190,7 +190,7 @@ def solve_Qstar(H, params, electric_charge_neutrality,
 
     mu_u, mu_d, mu_s, mu_e = sol.x
 
-    return _build_result(
+    return compute_alphabag_total_thermo_from_mu(
         mu_u, mu_d, mu_s, mu_e, H.T, params,
         include_photons=include_photons,
         include_gluons=include_gluons,
@@ -278,7 +278,7 @@ def solve_Qstar_cfl(H, params, Delta0, electric_charge_neutrality,
 
     mu_u, mu_d, mu_s, mu_e = sol.x
 
-    return _build_cfl_result(
+    return compute_cfl_total_thermo_from_mu(
         mu_u, mu_d, mu_s, mu_e, H.T, Delta0, params,
         include_photons=include_photons,
         include_gluons=include_gluons,
@@ -595,6 +595,8 @@ def _init_data(shape):
         'Y_u': np.full(shape, np.nan),
         'Y_d': np.full(shape, np.nan),
         'Y_s': np.full(shape, np.nan),
+        'Y_e': np.full(shape, np.nan),
+        'n_e': np.full(shape, np.nan),
         'P_total': np.full(shape, np.nan),
         'e_total': np.full(shape, np.nan),
         's_total': np.full(shape, np.nan),
@@ -618,6 +620,8 @@ def _store_result(data, idx, Qs, current_guess):
         data['Y_u'][idx] = Qs.Y_u
         data['Y_d'][idx] = Qs.Y_d
         data['Y_s'][idx] = Qs.Y_s
+        data['Y_e'][idx] = Qs.Y_e
+        data['n_e'][idx] = Qs.n_e
         data['P_total'][idx] = Qs.P_total
         data['e_total'][idx] = Qs.e_total
         data['s_total'][idx] = Qs.s_total

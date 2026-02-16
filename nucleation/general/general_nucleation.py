@@ -100,7 +100,7 @@ def critical_radius_standard(Qs, H, sigma):
 
     R_c = 2 sigma / Delta_F_bulk
 
-    where Delta_F_bulk is the general bulk driving force (Eq. 4.35).
+    where Delta_F_bulk is the general bulk driving force.
 
     Only defined when Delta_F_bulk > 0 (metastable region).
 
