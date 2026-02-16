@@ -18,9 +18,11 @@ Minimization case (GCN with Coulomb):
 Screening case: TODO
 """
 
+import os
 import numpy as np
 from types import SimpleNamespace
 from scipy.optimize import root
+from dataclasses import dataclass
 from eos.alphabag.eos import compute_alphabag_total_thermo_from_mu, compute_cfl_total_thermo_from_mu
 from nucleation.general.general_nucleation import (
     coulomb_delta_mu_e, coulomb_delta_P, coulomb_P, coulomb_W,
@@ -493,7 +495,8 @@ def compute_Qstar_coulomb_table_betaeq(hadronic_table, params, sigma,
                                         include_photons=True, include_gluons=True,
                                         include_thermal_neutrinos=True,
                                         quark_phase='unpaired', Delta0=None,
-                                        initial_guess=None, verbose=False):
+                                        initial_guess=None, verbose=False,
+                                        save_table=False, output_file=None):
     """
     Compute Q* + R_c table over a 2D grid (n_B_H, T) with Coulomb corrections.
 
@@ -568,8 +571,15 @@ def compute_Qstar_coulomb_table_betaeq(hadronic_table, params, sigma,
                   f"-> {row_converged}/{len(n_B_arr)} converged")
 
     hadronic_grids = {'n_B_H': n_B_arr, 'T': T_arr}
-    return QstarCoulombTableData(
+    result = QstarCoulombTableData(
         eq_type='betaeq', hadronic_grids=hadronic_grids, data=data)
+
+    if save_table:
+        if output_file is None:
+            output_file = f"Qstar_coulomb_{result.eq_type}.dat"
+        _export_table(result, params, sigma, output_file)
+
+    return result
 
 
 # =============================================================================
@@ -579,7 +589,8 @@ def compute_Qstar_coulomb_table_trapped(hadronic_table, params, sigma,
                                          include_photons=True, include_gluons=True,
                                          include_thermal_neutrinos=True,
                                          quark_phase='unpaired', Delta0=None,
-                                         initial_guess=None, verbose=False):
+                                         initial_guess=None, verbose=False,
+                                         save_table=False, output_file=None):
     """
     Compute Q* + R_c table over a 3D grid (n_B_H, Y_L_H, T) with Coulomb.
 
@@ -648,14 +659,20 @@ def compute_Qstar_coulomb_table_trapped(hadronic_table, params, sigma,
                       f"-> {row_converged}/{len(n_B_arr)} converged")
 
     hadronic_grids = {'n_B_H': n_B_arr, 'Y_L_H': Y_L_arr, 'T': T_arr}
-    return QstarCoulombTableData(
+    result = QstarCoulombTableData(
         eq_type='trapped', hadronic_grids=hadronic_grids, data=data)
+
+    if save_table:
+        if output_file is None:
+            output_file = f"Qstar_coulomb_{result.eq_type}.dat"
+        _export_table(result, params, sigma, output_file)
+
+    return result
 
 
 # =============================================================================
 # Helpers
 # =============================================================================
-from dataclasses import dataclass
 
 @dataclass
 class QstarCoulombTableData:
@@ -726,3 +743,107 @@ def _store_coulomb_result(data, idx, sol, current_guess):
         data['converged'][idx] = True
         current_guess = np.array([Qs.mu_u, Qs.mu_d, Qs.mu_s, Qs.mu_e, R_c])
     return current_guess
+
+
+# =============================================================================
+# Export / Load
+# =============================================================================
+QSTAR_COULOMB_GRID_AXES = {
+    'betaeq':  ['n_B_H', 'T'],
+    'trapped': ['n_B_H', 'Y_L_H', 'T'],
+}
+
+_GRID_KEY_MAP = {'n_B_H': 'n_B_H', 'Y_L_H': 'Y_L_H', 'T': 'T'}
+
+
+def _export_table(result, params, sigma, output_file):
+    """Export Q* Coulomb results to a text file with input grid + output columns."""
+    axes = QSTAR_COULOMB_GRID_AXES[result.eq_type]
+    grid_arrays = [result.hadronic_grids[ax] for ax in axes]
+    mesh = np.meshgrid(*grid_arrays, indexing='ij')
+    input_cols = [m.ravel(order='F') for m in mesh]
+
+    data_keys = ['n_B', 'mu_B', 'mu_C', 'mu_S', 'mu_u', 'mu_d', 'mu_s', 'mu_e',
+                 'Y_C', 'Y_S', 'Y_u', 'Y_d', 'Y_s',
+                 'P_total', 'e_total', 's_total', 'f_total',
+                 'R_c', 'delta_n_C', 'converged']
+    output_names = [k + '_Qs' for k in data_keys]
+    output_cols = [result.data[k].ravel(order='F') for k in data_keys]
+
+    all_names = list(axes) + output_names
+    all_cols = np.column_stack(input_cols + output_cols)
+
+    col_header = "  ".join(f"{name:>14s}" for name in all_names)
+    meta = (
+        f"# Q* saddlepoint + Coulomb nucleation table\n"
+        f"# hadronic_eq_type: {result.eq_type}\n"
+        f"# sigma: {sigma} MeV/fm^2\n"
+        f"# quark_eos: {params.name}\n"
+        f"# m_u={params.m_u} MeV  m_d={params.m_d} MeV  m_s={params.m_s} MeV"
+        f"  alpha={params.alpha}  B4={params.B4} MeV\n"
+        f"# {col_header}\n"
+    )
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+    with open(output_file, 'w') as f:
+        f.write(meta)
+    with open(output_file, 'ab') as f:
+        np.savetxt(f, all_cols, fmt='%16.8e')
+    print(f"  Saved Q* Coulomb table ({all_cols.shape[0]} rows) -> {output_file}")
+
+
+def load_Qstar_table(filepath):
+    """
+    Load a Q* Coulomb table from a .dat file saved by _export_table.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to the .dat file.
+
+    Returns
+    -------
+    QstarCoulombTableData
+    """
+    eq_type = None
+    col_names = None
+    with open(filepath) as f:
+        for line in f:
+            if not line.startswith('#'):
+                break
+            if 'hadronic_eq_type:' in line:
+                eq_type = line.split('hadronic_eq_type:')[1].strip()
+            col_names = line.lstrip('#').split()
+
+    if eq_type is None or col_names is None:
+        raise ValueError(f"Cannot parse header in {filepath}")
+
+    axes = QSTAR_COULOMB_GRID_AXES[eq_type]
+    n_axes = len(axes)
+
+    raw = np.loadtxt(filepath)
+
+    hadronic_grids = {}
+    shape = []
+    for i, ax in enumerate(axes):
+        vals = np.unique(raw[:, i])
+        hadronic_grids[_GRID_KEY_MAP[ax]] = vals
+        shape.append(len(vals))
+    shape = tuple(shape)
+
+    data_col_names = col_names[n_axes:]
+    data = {}
+    for j, cname in enumerate(data_col_names):
+        key = cname.replace('_Qs', '')
+        col_flat = raw[:, n_axes + j]
+        arr = col_flat.reshape(shape, order='F')
+        if key == 'converged':
+            arr = arr.astype(bool)
+        data[key] = arr
+
+    return QstarCoulombTableData(
+        eq_type=eq_type,
+        hadronic_grids=hadronic_grids,
+        data=data,
+        filepath=filepath,
+    )

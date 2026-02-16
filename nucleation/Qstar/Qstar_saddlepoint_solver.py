@@ -107,6 +107,78 @@ def build_Qstar_interpolators(table, method='linear'):
 
 
 # =============================================================================
+# Load Q* table from file
+# =============================================================================
+_GRID_KEY_MAP = {'n_B_H': 'n_B_H', 'Y_L_H': 'Y_L_H', 'Y_C_H': 'Y_C_H', 'T': 'T'}
+
+
+def load_Qstar_table(filepath):
+    """
+    Load a Q* saddlepoint table from a .dat file saved by _export_table.
+
+    Backward-compatible: handles files that lack the Y_e / n_e columns
+    (exported before those fields were added).
+
+    Parameters
+    ----------
+    filepath : str
+        Path to the .dat file.
+
+    Returns
+    -------
+    QstarSaddlepointTableData
+    """
+    eq_type = None
+    col_names = None
+    with open(filepath) as f:
+        for line in f:
+            if not line.startswith('#'):
+                break
+            if 'hadronic_eq_type:' in line:
+                eq_type = line.split('hadronic_eq_type:')[1].strip()
+            col_names = line.lstrip('#').split()
+
+    if eq_type is None or col_names is None:
+        raise ValueError(f"Cannot parse header in {filepath}")
+
+    axes = QSTAR_GRID_AXES[eq_type]
+    n_axes = len(axes)
+
+    raw = np.loadtxt(filepath)
+
+    hadronic_grids = {}
+    shape = []
+    for i, ax in enumerate(axes):
+        vals = np.unique(raw[:, i])
+        hadronic_grids[_GRID_KEY_MAP[ax]] = vals
+        shape.append(len(vals))
+    shape = tuple(shape)
+
+    data_col_names = col_names[n_axes:]
+    data = {}
+    for j, cname in enumerate(data_col_names):
+        key = cname.replace('_Qs', '')
+        col_flat = raw[:, n_axes + j]
+        arr = col_flat.reshape(shape, order='F')
+        if key == 'converged':
+            arr = arr.astype(bool)
+        data[key] = arr
+
+    # Backward compat: reconstruct Y_e / n_e if absent
+    if 'Y_e' not in data and 'Y_C' in data:
+        data['Y_e'] = data['Y_C'].copy()
+    if 'n_e' not in data:
+        data['n_e'] = np.full(shape, np.nan)
+
+    return QstarSaddlepointTableData(
+        eq_type=eq_type,
+        hadronic_grids=hadronic_grids,
+        data=data,
+        filepath=filepath,
+    )
+
+
+# =============================================================================
 # Qstar computation for given n_B_H, Y_C_H, Y_S_H, T_H
 # =============================================================================
 def solve_Qstar(H, params, electric_charge_neutrality,
@@ -642,7 +714,7 @@ def _export_table(result, params, electric_charge_neutrality, output_file):
 
     # Output columns (Q* thermodynamic quantities)
     data_keys = ['n_B', 'mu_B', 'mu_C', 'mu_S', 'mu_u', 'mu_d', 'mu_s', 'mu_e',
-                 'Y_C', 'Y_S', 'Y_u', 'Y_d', 'Y_s',
+                 'Y_C', 'Y_S', 'Y_u', 'Y_d', 'Y_s', 'Y_e', 'n_e',
                  'P_total', 'e_total', 's_total', 'f_total', 'converged']
     output_names = [k + '_Qs' for k in data_keys]
     output_cols = [result.data[k].ravel(order='F') for k in data_keys]
