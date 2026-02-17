@@ -38,7 +38,9 @@ Usage
 
 import numpy as np
 from types import SimpleNamespace
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from scipy.interpolate import interp1d
+from scipy.optimize import root_scalar
 
 from nucleation.general.general_nucleation import (
     driving_force,
@@ -556,4 +558,148 @@ def compute_energy_barrier(
         sigma=sigma,
         R_c=R_c_val,
         W_c=W_c_val,
+    )
+
+
+# =============================================================================
+# Nucleation temperature: T at which tau = tau_target
+# =============================================================================
+@dataclass
+class NucleationTemperatureResult:
+    """Result of nucleation temperature computation.
+
+    Attributes
+    ----------
+    n_B_H : np.ndarray
+        Baryon density array (fm^-3).
+    T_nuc : np.ndarray
+        Nucleation temperature (MeV). NaN where no solution found.
+    tau_target : float
+        Target nucleation time (s).
+    converged : np.ndarray
+        Boolean mask: True where root finding succeeded.
+    """
+    n_B_H: np.ndarray
+    T_nuc: np.ndarray
+    tau_target: float
+    converged: np.ndarray
+
+
+def compute_nucleation_temperature(
+    nucleation_obs,
+    tau_target=1.0,
+    i_YL=None,
+    i_YC=None,
+    T_guess=None,
+    verbose=False,
+):
+    """
+    Find the temperature T at which tau(n_B_H, T) = tau_target.
+
+    For each n_B_H value, interpolates log10(tau) vs T from the
+    pre-computed NucleationObservables grid and uses root_scalar
+    to find the crossing. The guess is updated with the previous
+    point's solution at each step.
+
+    Parameters
+    ----------
+    nucleation_obs : NucleationObservables
+        Pre-computed nucleation observables on a grid.
+    tau_target : float
+        Target nucleation time (s).
+    i_YL : int or None
+        Y_L index for trapped-neutrino case. Required if eq_type='trapped'.
+    i_YC : int or None
+        Y_C index for fixed-Y_C case. Required if eq_type='fixedYC'.
+    T_guess : float or None
+        Initial guess for T (MeV) at the first n_B point.
+        If None, estimated from the grid data.
+    verbose : bool
+        Print progress.
+
+    Returns
+    -------
+    NucleationTemperatureResult
+    """
+    grids = nucleation_obs.hadronic_grids
+    n_B_arr = grids['n_B_H']
+    T_arr = grids['T']
+    n_nB = len(n_B_arr)
+
+    log_tau_target = np.log10(tau_target)
+
+    # Extract the 1D tau slice for each n_B
+    T_nuc = np.full(n_nB, np.nan)
+    conv = np.zeros(n_nB, dtype=bool)
+
+    prev_T = T_guess  # will be updated after each successful solve
+
+    for i in range(n_nB):
+        # --- extract tau(T) at this n_B (and fixed Y_L/Y_C if needed) ---
+        if nucleation_obs.eq_type == 'betaeq':
+            tau_slice = nucleation_obs.tau[i, :]
+        elif nucleation_obs.eq_type == 'trapped':
+            if i_YL is None:
+                raise ValueError("i_YL required for trapped eq_type")
+            tau_slice = nucleation_obs.tau[i, i_YL, :]
+        elif nucleation_obs.eq_type == 'fixedYC':
+            if i_YC is None:
+                raise ValueError("i_YC required for fixedYC eq_type")
+            tau_slice = nucleation_obs.tau[i, i_YC, :]
+        else:
+            raise ValueError(f"Unknown eq_type: '{nucleation_obs.eq_type}'")
+
+        # --- log10(tau) on the T grid ---
+        with np.errstate(divide='ignore', invalid='ignore'):
+            log_tau = np.log10(tau_slice)
+
+        # Keep only finite points with T > 0
+        valid = np.isfinite(log_tau) & (T_arr > 0)
+        if np.sum(valid) < 2:
+            continue
+
+        T_valid = T_arr[valid]
+        log_tau_valid = log_tau[valid]
+
+        # --- Build interpolator: f(T) = log10(tau(T)) - log10(tau_target) ---
+        f_interp = interp1d(T_valid, log_tau_valid - log_tau_target,
+                            kind='linear', bounds_error=False, fill_value=np.nan)
+
+        # --- Find bracket: look for sign changes ---
+        diff = log_tau_valid - log_tau_target
+        sign_changes = np.where(np.diff(np.sign(diff)))[0]
+
+        if len(sign_changes) == 0:
+            continue
+
+        # Pick the sign change closest to previous solution
+        if prev_T is not None and len(sign_changes) > 1:
+            midpoints = 0.5 * (T_valid[sign_changes] + T_valid[sign_changes + 1])
+            j = sign_changes[np.argmin(np.abs(midpoints - prev_T))]
+        else:
+            j = sign_changes[0]
+
+        T_lo = float(T_valid[j])
+        T_hi = float(T_valid[j + 1])
+
+        # --- Root finding with root_scalar ---
+        try:
+            sol = root_scalar(f_interp, bracket=[T_lo, T_hi],
+                              x0=prev_T if prev_T is not None else 0.5 * (T_lo + T_hi),
+                              method='brentq')
+            if sol.converged:
+                T_nuc[i] = sol.root
+                conv[i] = True
+                prev_T = sol.root
+        except (ValueError, RuntimeError):
+            continue
+
+        if verbose and conv[i]:
+            print(f"  n_B={n_B_arr[i]:.4f} fm^-3 -> T_nuc={T_nuc[i]:.2f} MeV")
+
+    return NucleationTemperatureResult(
+        n_B_H=n_B_arr,
+        T_nuc=T_nuc,
+        tau_target=tau_target,
+        converged=conv,
     )
