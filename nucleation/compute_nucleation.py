@@ -428,3 +428,132 @@ def compute_nucleation_observables(
         tau=tau,
         Qstar_table=Qstar_table,
     )
+
+
+# =============================================================================
+# Energy barrier W(R) at a specific grid point
+# =============================================================================
+@dataclass
+class EnergyBarrierResult:
+    """Energy barrier W(R) at a single hadronic grid point.
+
+    Attributes
+    ----------
+    R : np.ndarray
+        Radius array (fm).
+    W : np.ndarray
+        Total work of formation W(R) (MeV).
+    W_bulk : np.ndarray
+        Bulk contribution -4/3 pi R^3 Delta_F (MeV).
+    W_surface : np.ndarray
+        Surface contribution 4 pi R^2 sigma (MeV).
+    W_coulomb : np.ndarray
+        Coulomb contribution (MeV). Zero for lcn/gcn modes.
+    Delta_F : float
+        Bulk driving force at this point (MeV/fm^3).
+    delta_n_C : float
+        Net charge density (fm^-3). Zero for lcn/gcn modes.
+    sigma : float
+        Surface tension (MeV/fm^2).
+    R_c : float
+        Critical radius (fm).
+    W_c : float
+        Critical work W(R_c) (MeV).
+    """
+    R: np.ndarray
+    W: np.ndarray
+    W_bulk: np.ndarray
+    W_surface: np.ndarray
+    W_coulomb: np.ndarray
+    Delta_F: float
+    delta_n_C: float
+    sigma: float
+    R_c: float
+    W_c: float
+
+
+def compute_energy_barrier(
+    hadronic_table,
+    Qstar_table,
+    sigma=30.0,
+    electric_charge_mode='gcn',
+    idx=None,
+    R_values=None,
+):
+    """
+    Compute W(R) at a specific hadronic grid point.
+
+    Parameters
+    ----------
+    hadronic_table : EOSTableData
+        Hadronic phase table.
+    Qstar_table : QstarTableData
+        Pre-computed Q* table.
+    sigma : float
+        Surface tension (MeV/fm^2).
+    electric_charge_mode : str
+        'lcn', 'gcn', 'gcn_coulomb', or 'coulomb_minimize'.
+    idx : tuple of int
+        Grid index, e.g. (i_nB, i_T) for beta_eq
+        or (i_nB, i_YL, i_T) for trapped.
+    R_values : array-like or None
+        Radius array (fm). If None, auto-generated from 0 to 5*R_c.
+
+    Returns
+    -------
+    EnergyBarrierResult
+    """
+    from nucleation.general.general_nucleation import coulomb_W
+
+    q_d = Qstar_table.data
+    shape = q_d['P_total'].shape
+    H, Qs = _build_phase_namespaces(hadronic_table, q_d, shape)
+    converged = q_d['converged']
+
+    if not converged[idx]:
+        raise ValueError(f"Q* solver did not converge at index {idx}")
+
+    # Driving force at this point
+    Delta_F_full = driving_force(Qs, H)
+    Delta_F = float(Delta_F_full[idx])
+
+    # Charge density for Coulomb modes
+    if electric_charge_mode in ('lcn', 'gcn'):
+        dnC = 0.0
+        R_c_val = float(critical_radius(Delta_F, sigma))
+        W_c_val = float(critical_work(Delta_F, sigma))
+    elif electric_charge_mode == 'gcn_coulomb':
+        dnC = float((Qs.Y_C[idx] - Qs.Y_e[idx]) * Qs.n_B[idx])
+        R_c_val = float(critical_radius_coulomb(Delta_F, sigma, dnC))
+        W_c_val = float(work_of_formation(R_c_val, Delta_F, sigma, dnC))
+    elif electric_charge_mode == 'coulomb_minimize':
+        dnC = float(q_d['delta_n_C'][idx])
+        R_c_val = float(q_d['R_c'][idx])
+        W_c_val = float(work_of_formation(R_c_val, Delta_F, sigma, dnC))
+    else:
+        raise ValueError(f"Invalid electric_charge_mode: '{electric_charge_mode}'")
+
+    # Build R array
+    if R_values is None:
+        R_max = max(5.0 * R_c_val, 20.0) if np.isfinite(R_c_val) else 20.0
+        R_values = np.linspace(0, R_max, 500)
+    R_values = np.asarray(R_values, dtype=float)
+
+    # Compute W(R) and its components
+    W_bulk = -4.0 / 3.0 * np.pi * R_values**3 * Delta_F
+    W_surface = 4.0 * np.pi * R_values**2 * sigma
+    W_coul = coulomb_W(R_values, dnC)
+    W_total = W_bulk + W_surface + W_coul
+
+    return EnergyBarrierResult(
+        R=R_values,
+        W=W_total,
+        W_bulk=W_bulk,
+        W_surface=W_surface,
+        W_coulomb=W_coul,
+        Delta_F=Delta_F,
+        delta_n_C=dnC,
+        sigma=sigma,
+        R_c=R_c_val,
+        W_c=W_c_val,
+    )
