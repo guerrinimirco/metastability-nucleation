@@ -1,8 +1,8 @@
 """
-Nucleation Observables Wrapper
-==============================
+Nucleation Observables
+======================
 
-High-level function that computes nucleation observables (R_c, W_c, Gamma, tau)
+High-level functions that compute nucleation observables (R_c, W_c, Gamma, tau)
 for the hadron-to-quark phase transition.
 
 Two independent parameters control the Q* solver:
@@ -16,7 +16,7 @@ Two independent parameters control the Q* solver:
         gcn              : Global charge neutrality, no Coulomb
         gcn_coulomb      : GCN solver (no Coulomb in equations),
                            Coulomb energy added post-hoc to W(R), R_c from findroot
-        coulomb_minimize : Full Coulomb minimization via solve_Qstar_coulomb
+        coulomb_minimize : Full Coulomb minimization via solve_coulomb
                            (R is part of the unknowns)
 
 Constraints:
@@ -25,7 +25,7 @@ Constraints:
 
 Usage
 -----
->>> from nucleation.compute_nucleation import compute_nucleation_observables
+>>> from nucleation import compute_nucleation_observables
 >>> result = compute_nucleation_observables(
 ...     hadronic_table,
 ...     params=my_params,
@@ -38,21 +38,23 @@ Usage
 
 import numpy as np
 from types import SimpleNamespace
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from functools import partial
 from scipy.interpolate import interp1d
 from scipy.optimize import root_scalar
 
-from nucleation.general.general_nucleation import (
+from nucleation.physics import (
     driving_force,
     critical_radius, critical_work,
     critical_radius_coulomb,
-    work_of_formation,
+    work_of_formation, coulomb_W,
     nucleation_rate, nucleation_time,
 )
+from nucleation.table import compute_Qstar_table
 
 
 # =============================================================================
-# Output dataclass
+# Output dataclasses
 # =============================================================================
 @dataclass
 class NucleationObservables:
@@ -61,7 +63,7 @@ class NucleationObservables:
     Attributes
     ----------
     eq_type : str
-        Equilibrium type ('betaeq', 'trapped', 'fixedYC').
+        Equilibrium type ('beta_eq', 'trapped_neutrinos', 'fixed_yc').
     hadronic_grids : dict
         Input grids (n_B_H, T, Y_L_H, etc.).
     flavor_mode : str
@@ -96,28 +98,53 @@ class NucleationObservables:
     Qstar_table: object = None
 
 
+@dataclass
+class EnergyBarrierResult:
+    """Energy barrier W(R) at a single hadronic grid point."""
+    R: np.ndarray
+    W: np.ndarray
+    W_bulk: np.ndarray
+    W_surface: np.ndarray
+    W_coulomb: np.ndarray
+    Delta_F: float
+    delta_n_C: float
+    sigma: float
+    R_c: float
+    W_c: float
+
+
+@dataclass
+class NucleationTemperatureResult:
+    """Result of nucleation temperature computation.
+
+    Attributes
+    ----------
+    hadronic_grids : dict
+        Input grids (n_B_H, and Y_L_H or Y_C_H for multi-dim cases).
+    T_nuc : np.ndarray
+        Nucleation temperature (MeV). NaN where no solution found.
+    tau_target : float
+        Target nucleation time (s).
+    converged : np.ndarray
+        Boolean mask: True where root finding succeeded.
+    eq_type : str
+        Equilibrium type.
+    """
+    hadronic_grids: dict
+    T_nuc: np.ndarray
+    tau_target: float
+    converged: np.ndarray
+    eq_type: str
+
+
 # =============================================================================
 # Helper: build H and Qs SimpleNamespace from table data
 # =============================================================================
 def _build_phase_namespaces(hadronic_table, q_d, shape):
-    """
-    Build array-based H and Qs SimpleNamespace objects from table data.
+    """Build array-based H and Qs SimpleNamespace objects from table data.
 
-    These namespaces provide the interface expected by general_nucleation
+    These namespaces provide the interface expected by physics
     functions (driving_force, dynamical_prefactor, etc.).
-
-    Parameters
-    ----------
-    hadronic_table : EOSTableData
-        Hadronic phase table.
-    q_d : dict
-        Q* data dictionary (from Qstar_table.data).
-    shape : tuple
-        Shape of the output arrays.
-
-    Returns
-    -------
-    (H, Qs) : tuple of SimpleNamespace
     """
     h_d = hadronic_table.data
     grids = hadronic_table.grids
@@ -191,69 +218,46 @@ def _compute_Qstar(hadronic_table, params, sigma,
                    flavor_mode, electric_charge_mode,
                    include_photons, include_gluons, include_thermal_neutrinos,
                    initial_guess, verbose):
-    """Dispatch to appropriate Q* solver based on flavor_mode and electric_charge_mode."""
+    """Dispatch to appropriate Q* solver via functools.partial + generic grid loop."""
+    from nucleation.solvers import (
+        solve_frozen, solve_saddlepoint, solve_saddlepoint_cfl,
+        solve_coulomb, solve_coulomb_cfl,
+    )
 
     charge_neutrality = 'local' if electric_charge_mode == 'lcn' else 'global'
+    common_kw = dict(
+        include_photons=include_photons,
+        include_gluons=include_gluons,
+        include_thermal_neutrinos=include_thermal_neutrinos,
+    )
 
     if flavor_mode == 'frozen':
-        from nucleation.Qstar.Qstar_frozen_solver import compute_Qstar_table
-        return compute_Qstar_table(
-            hadronic_table, params,
-            electric_charge_neutrality=charge_neutrality,
-            include_photons=include_photons,
-            include_gluons=include_gluons,
-            include_thermal_neutrinos=include_thermal_neutrinos,
-            initial_guess=initial_guess,
-            verbose=verbose,
-        )
+        solver_fn = partial(solve_frozen, params=params,
+                            charge_neutrality=charge_neutrality, **common_kw)
+        return compute_Qstar_table(hadronic_table, solver_fn,
+                                   initial_guess=initial_guess, verbose=verbose)
 
-    # saddlepoint modes
+    # saddlepoint modes (lcn, gcn, gcn_coulomb)
     if electric_charge_mode in ('lcn', 'gcn', 'gcn_coulomb'):
-        from nucleation.Qstar.Qstar_saddlepoint_solver import compute_Qstar_table
-        return compute_Qstar_table(
-            hadronic_table, params,
-            electric_charge_neutrality=charge_neutrality,
-            include_photons=include_photons,
-            include_gluons=include_gluons,
-            include_thermal_neutrinos=include_thermal_neutrinos,
-            quark_phase=quark_phase,
-            Delta0=Delta0,
-            initial_guess=initial_guess,
-            verbose=verbose,
-        )
+        if quark_phase == 'cfl':
+            solver_fn = partial(solve_saddlepoint_cfl, params=params,
+                                Delta0=Delta0,
+                                charge_neutrality=charge_neutrality, **common_kw)
+        else:
+            solver_fn = partial(solve_saddlepoint, params=params,
+                                charge_neutrality=charge_neutrality, **common_kw)
+        return compute_Qstar_table(hadronic_table, solver_fn,
+                                   initial_guess=initial_guess, verbose=verbose)
 
     # coulomb_minimize
-    from nucleation.Qstar.Qstar_saddlepoint_coulomb_solver import (
-        compute_Qstar_coulomb_table_betaeq,
-        compute_Qstar_coulomb_table_trapped,
-    )
-    eq_type = hadronic_table.eq_type
-    if eq_type == 'beta_eq':
-        return compute_Qstar_coulomb_table_betaeq(
-            hadronic_table, params, sigma,
-            include_photons=include_photons,
-            include_gluons=include_gluons,
-            include_thermal_neutrinos=include_thermal_neutrinos,
-            quark_phase=quark_phase,
-            Delta0=Delta0,
-            initial_guess=initial_guess,
-            verbose=verbose,
-        )
-    elif eq_type == 'trapped_neutrinos':
-        return compute_Qstar_coulomb_table_trapped(
-            hadronic_table, params, sigma,
-            include_photons=include_photons,
-            include_gluons=include_gluons,
-            include_thermal_neutrinos=include_thermal_neutrinos,
-            quark_phase=quark_phase,
-            Delta0=Delta0,
-            initial_guess=initial_guess,
-            verbose=verbose,
-        )
+    if quark_phase == 'cfl':
+        solver_fn = partial(solve_coulomb_cfl, params=params, Delta0=Delta0,
+                            sigma=sigma, **common_kw)
     else:
-        raise ValueError(
-            f"coulomb_minimize not supported for eq_type '{eq_type}'. "
-            f"Only 'beta_eq' and 'trapped_neutrinos' are supported.")
+        solver_fn = partial(solve_coulomb, params=params, sigma=sigma, **common_kw)
+    return compute_Qstar_table(hadronic_table, solver_fn,
+                               include_coulomb=True,
+                               initial_guess=initial_guess, verbose=verbose)
 
 
 # =============================================================================
@@ -281,15 +285,10 @@ def compute_nucleation_observables(
     """
     Compute nucleation observables for the hadron-to-quark phase transition.
 
-    Given hadronic conditions (from a table) and quark matter parameters,
-    computes critical radius, energy barrier, nucleation rate, and
-    nucleation time over the full grid.
-
     Parameters
     ----------
     hadronic_table : EOSTableData
-        Hadronic phase conditions. Must contain grids ('n_B', 'T', ...)
-        and data ('P_total', 'e_total', 'mu_B', 'mu_C', 'mu_S', 'mu_e', ...).
+        Hadronic phase conditions.
     params : AlphaBagParams or None
         Quark EOS parameters. Required if Qstar_table is None.
     Qstar_table : QstarTableData or None
@@ -297,32 +296,24 @@ def compute_nucleation_observables(
     sigma : float
         Surface tension (MeV/fm^2).
     V : float
-        System volume (fm^3) for nucleation time. Default: sphere with R=100 m.
+        System volume (fm^3) for nucleation time.
     quark_phase : str
         'unpaired' or 'cfl'.
     Delta0 : float or None
         CFL pairing gap (MeV). Required if quark_phase='cfl'.
     flavor_mode : str
-        'frozen'       : Flavor fractions frozen from hadronic phase.
-        'saddlepoint'  : Minimization of W with respect to flavor composition.
-        frozen only supports 'lcn' and 'gcn', no CFL.
+        'frozen' or 'saddlepoint'.
     electric_charge_mode : str
-        'lcn'              : Local charge neutrality, no Coulomb.
-        'gcn'              : Global charge neutrality, no Coulomb.
-        'gcn_coulomb'      : GCN solver, Coulomb added post-hoc to W(R).
-        'coulomb_minimize' : Full Coulomb minimization (R is unknown).
+        'lcn', 'gcn', 'gcn_coulomb', or 'coulomb_minimize'.
     include_photons, include_gluons, include_thermal_neutrinos : bool
-        Include contributions in quark EOS.
     xi_q : float
-        Quark correlation length (fm). Default 0.7.
+        Quark correlation length (fm).
     lambda_th : float
-        Thermal conductivity. Default 0.
+        Thermal conductivity.
     zeta_th : float
-        Bulk viscosity. Default 0.
+        Bulk viscosity.
     initial_guess : array-like or None
-        Initial guess for Q* solver.
     verbose : bool
-        Print convergence info.
 
     Returns
     -------
@@ -410,15 +401,8 @@ def compute_nucleation_observables(
     tau = nucleation_time(Gamma, V)
 
     # ---- Step 6: Build result ----
-    eq_type_map = {
-        'beta_eq': 'betaeq',
-        'trapped_neutrinos': 'trapped',
-        'fixed_yc': 'fixedYC',
-    }
-    eq_type = eq_type_map.get(hadronic_table.eq_type, hadronic_table.eq_type)
-
     return NucleationObservables(
-        eq_type=eq_type,
+        eq_type=hadronic_table.eq_type,
         hadronic_grids=Qstar_table.hadronic_grids,
         flavor_mode=flavor_mode,
         electric_charge_mode=electric_charge_mode,
@@ -435,45 +419,6 @@ def compute_nucleation_observables(
 # =============================================================================
 # Energy barrier W(R) at a specific grid point
 # =============================================================================
-@dataclass
-class EnergyBarrierResult:
-    """Energy barrier W(R) at a single hadronic grid point.
-
-    Attributes
-    ----------
-    R : np.ndarray
-        Radius array (fm).
-    W : np.ndarray
-        Total work of formation W(R) (MeV).
-    W_bulk : np.ndarray
-        Bulk contribution -4/3 pi R^3 Delta_F (MeV).
-    W_surface : np.ndarray
-        Surface contribution 4 pi R^2 sigma (MeV).
-    W_coulomb : np.ndarray
-        Coulomb contribution (MeV). Zero for lcn/gcn modes.
-    Delta_F : float
-        Bulk driving force at this point (MeV/fm^3).
-    delta_n_C : float
-        Net charge density (fm^-3). Zero for lcn/gcn modes.
-    sigma : float
-        Surface tension (MeV/fm^2).
-    R_c : float
-        Critical radius (fm).
-    W_c : float
-        Critical work W(R_c) (MeV).
-    """
-    R: np.ndarray
-    W: np.ndarray
-    W_bulk: np.ndarray
-    W_surface: np.ndarray
-    W_coulomb: np.ndarray
-    Delta_F: float
-    delta_n_C: float
-    sigma: float
-    R_c: float
-    W_c: float
-
-
 def compute_energy_barrier(
     hadronic_table,
     Qstar_table,
@@ -488,9 +433,7 @@ def compute_energy_barrier(
     Parameters
     ----------
     hadronic_table : EOSTableData
-        Hadronic phase table.
     Qstar_table : QstarTableData
-        Pre-computed Q* table.
     sigma : float
         Surface tension (MeV/fm^2).
     electric_charge_mode : str
@@ -505,8 +448,6 @@ def compute_energy_barrier(
     -------
     EnergyBarrierResult
     """
-    from nucleation.general.general_nucleation import coulomb_W
-
     q_d = Qstar_table.data
     shape = q_d['P_total'].shape
     H, Qs = _build_phase_namespaces(hadronic_table, q_d, shape)
@@ -564,51 +505,8 @@ def compute_energy_barrier(
 # =============================================================================
 # Nucleation temperature: T at which tau = tau_target
 # =============================================================================
-@dataclass
-class NucleationTemperatureResult:
-    """Result of nucleation temperature computation.
-
-    Attributes
-    ----------
-    hadronic_grids : dict
-        Input grids (n_B_H, and Y_L_H or Y_C_H for multi-dim cases).
-    T_nuc : np.ndarray
-        Nucleation temperature (MeV). NaN where no solution found.
-        Shape: (n_nB,) for betaeq, (n_nB, n_YL) for trapped,
-        (n_nB, n_YC) for fixedYC.
-    tau_target : float
-        Target nucleation time (s).
-    converged : np.ndarray
-        Boolean mask: True where root finding succeeded. Same shape as T_nuc.
-    eq_type : str
-        Equilibrium type.
-    """
-    hadronic_grids: dict
-    T_nuc: np.ndarray
-    tau_target: float
-    converged: np.ndarray
-    eq_type: str
-
-
 def _find_T_root_1d(T_arr, tau_slice, log_tau_target, prev_T):
-    """
-    Find T where log10(tau(T)) = log_tau_target along a 1D T slice.
-
-    Parameters
-    ----------
-    T_arr : np.ndarray
-        Temperature grid (MeV).
-    tau_slice : np.ndarray
-        tau values on the T grid.
-    log_tau_target : float
-        log10 of target tau.
-    prev_T : float or None
-        Previous solution (used to pick bracket and as initial guess).
-
-    Returns
-    -------
-    (T_root, success) : (float, bool)
-    """
+    """Find T where log10(tau(T)) = log_tau_target along a 1D T slice."""
     with np.errstate(divide='ignore', invalid='ignore'):
         log_tau = np.log10(tau_slice)
 
@@ -619,11 +517,9 @@ def _find_T_root_1d(T_arr, tau_slice, log_tau_target, prev_T):
     T_valid = T_arr[valid]
     log_tau_valid = log_tau[valid]
 
-    # Interpolator: f(T) = log10(tau(T)) - log10(tau_target)
     f_interp = interp1d(T_valid, log_tau_valid - log_tau_target,
                         kind='linear', bounds_error=False, fill_value=np.nan)
 
-    # Sign changes
     diff = log_tau_valid - log_tau_target
     sign_changes = np.where(np.diff(np.sign(diff)))[0]
 
@@ -661,28 +557,18 @@ def compute_nucleation_temperature(
     """
     Find the temperature T at which tau = tau_target over the full grid.
 
-    For each grid point (n_B_H for betaeq, or (n_B_H, Y_L_H) for trapped,
-    or (n_B_H, Y_C_H) for fixedYC), interpolates log10(tau) vs T and
-    uses root_scalar to find the crossing. The guess is updated with
-    the previous point's solution at each step along the n_B axis.
-
     Parameters
     ----------
     nucleation_obs : NucleationObservables
-        Pre-computed nucleation observables on a grid.
     tau_target : float
         Target nucleation time (s).
     T_guess : float or None
         Initial guess for T (MeV) at the first n_B point.
-        If None, estimated from the grid data.
     verbose : bool
-        Print progress.
 
     Returns
     -------
     NucleationTemperatureResult
-        T_nuc shape: (n_nB,) for betaeq,
-        (n_nB, n_YL) for trapped, (n_nB, n_YC) for fixedYC.
     """
     grids = nucleation_obs.hadronic_grids
     n_B_arr = grids['n_B_H']
@@ -692,7 +578,7 @@ def compute_nucleation_temperature(
 
     log_tau_target = np.log10(tau_target)
 
-    if eq_type == 'betaeq':
+    if eq_type == 'beta_eq':
         # tau shape: (n_nB, n_T)
         T_nuc = np.full(n_nB, np.nan)
         conv = np.zeros(n_nB, dtype=bool)
@@ -710,7 +596,7 @@ def compute_nucleation_temperature(
 
         out_grids = {'n_B_H': n_B_arr}
 
-    elif eq_type == 'trapped':
+    elif eq_type == 'trapped_neutrinos':
         # tau shape: (n_nB, n_YL, n_T)
         YL_arr = grids['Y_L_H']
         n_YL = len(YL_arr)
@@ -732,7 +618,7 @@ def compute_nucleation_temperature(
 
         out_grids = {'n_B_H': n_B_arr, 'Y_L_H': YL_arr}
 
-    elif eq_type == 'fixedYC':
+    elif eq_type == 'fixed_yc':
         # tau shape: (n_nB, n_YC, n_T)
         YC_arr = grids['Y_C_H']
         n_YC = len(YC_arr)
