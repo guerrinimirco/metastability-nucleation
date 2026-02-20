@@ -574,8 +574,8 @@ def compute_energy_barrier(
     R_values = np.asarray(R_values, dtype=float)
 
     # Compute W(R) and its components
-    W_bulk = -4.0 / 3.0 * np.pi * R_values**3 * Delta_F
-    W_surface = 4.0 * np.pi * R_values**2 * sigma
+    W_bulk = bulk_W(R_values, Delta_F)
+    W_surface = surface_W(R_values, sigma)
     W_coul = coulomb_W(R_values, dnC)
     W_total = W_bulk + W_surface + W_coul
 
