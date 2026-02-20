@@ -507,7 +507,7 @@ def compute_energy_barrier(
         )
 
         W_bulk = np.full_like(R_values, np.nan)
-        W_surface = 4.0 * np.pi * R_values**2 * sigma
+        W_surface = surface_W(R_values, sigma)
         W_coul = np.full_like(R_values, np.nan)
 
         guess = None
@@ -531,8 +531,7 @@ def compute_energy_barrier(
 
             if result is not None:
                 dnC_R = (result.Y_C - result.Y_e) * result.n_B
-                W_bulk[i] = -4.0/3.0 * np.pi * R**3 * (
-                    result.P_total - H_point.P_total)
+                W_bulk[i] = bulk_W(R, result.P_total - H_point.P_total)
                 W_coul[i] = float(coulomb_W(R, dnC_R))
                 guess = np.array([
                     result.mu_u, result.mu_d, result.mu_s, result.mu_e])

@@ -27,7 +27,10 @@ from eos.alphabag.thermodynamics_quarks import (
     compute_cfl_thermo_from_mu,
 )
 from eos.general.thermodynamics_leptons import electron_thermo
-from nucleation.physics import coulomb_delta_mu_e, coulomb_delta_P, coulomb_W
+from nucleation.physics import (
+    coulomb_delta_mu_e, coulomb_delta_P, coulomb_W,
+    bulk_W, surface_W,
+)
 
 
 # =============================================================================
@@ -528,8 +531,8 @@ def work_of_formation_coulomb_at_R(R, H, params, sigma,
 
     delta_n_C = (result.Y_C - result.Y_e) * result.n_B
 
-    W = (-4.0 / 3.0 * np.pi * R**3 * (result.P_total - H.P_total)
-         + 4.0 * np.pi * R**2 * sigma
+    W = (bulk_W(R, result.P_total - H.P_total)
+         + surface_W(R, sigma)
          + coulomb_W(R, delta_n_C))
 
     return W
