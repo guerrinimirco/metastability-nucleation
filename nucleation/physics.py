@@ -121,6 +121,46 @@ def coulomb_W(R, delta_n_C):
     return -(16.0 / 15.0) * np.pi**2 * hc * alpha_EM * delta_n_C**2 * R**5
 
 
+def bulk_W(R, Delta_F_bulk):
+    """Bulk (volume) contribution to the work of formation.
+
+    W_bulk = -4/3 pi R^3 Delta_F_bulk
+
+    Parameters
+    ----------
+    R : float or array
+        Droplet radius (fm).
+    Delta_F_bulk : float or array
+        Bulk driving force (MeV/fm^3).
+
+    Returns
+    -------
+    float or array
+        Bulk contribution to W (MeV).
+    """
+    return -4.0 / 3.0 * np.pi * R**3 * Delta_F_bulk
+
+
+def surface_W(R, sigma):
+    """Surface contribution to the work of formation.
+
+    W_surface = 4 pi R^2 sigma
+
+    Parameters
+    ----------
+    R : float or array
+        Droplet radius (fm).
+    sigma : float
+        Surface tension (MeV/fm^2).
+
+    Returns
+    -------
+    float or array
+        Surface contribution to W (MeV).
+    """
+    return 4.0 * np.pi * R**2 * sigma
+
+
 # =============================================================================
 # Bulk driving force (single source of truth)
 # =============================================================================
@@ -187,7 +227,7 @@ def critical_radius(Delta_F_bulk, sigma):
 
 
 # =============================================================================
-# Critical work (standard CNT, no Coulomb)
+# Critical work (no Coulomb)
 # =============================================================================
 def critical_work(Delta_F_bulk, sigma):
     """
@@ -285,10 +325,7 @@ def work_of_formation(R, Delta_F_bulk, sigma, delta_n_C=0.0):
     float or ndarray
         Work of formation W(R) (MeV).
     """
-    W_bulk = -4.0 / 3.0 * np.pi * R**3 * Delta_F_bulk
-    W_surface = 4.0 * np.pi * R**2 * sigma
-    W_coul = coulomb_W(R, delta_n_C)
-    return W_bulk + W_surface + W_coul
+    return bulk_W(R, Delta_F_bulk) + surface_W(R, sigma) + coulomb_W(R, delta_n_C)
 
 
 # =============================================================================

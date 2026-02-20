@@ -47,7 +47,7 @@ from nucleation.physics import (
     driving_force,
     critical_radius, critical_work,
     critical_radius_coulomb,
-    work_of_formation, coulomb_W,
+    work_of_formation, bulk_W, surface_W, coulomb_W,
     nucleation_rate, nucleation_time,
 )
 from nucleation.table import compute_Qstar_table
@@ -428,9 +428,19 @@ def compute_energy_barrier(
     electric_charge_mode='gcn',
     idx=None,
     R_values=None,
+    params=None,
+    quark_phase='unpaired',
+    Delta0=None,
+    include_photons=True,
+    include_gluons=True,
+    include_thermal_neutrinos=True,
 ):
     """
     Compute W(R) at a specific hadronic grid point.
+
+    For 'coulomb_minimize', solves the Q* equations at each R with
+    Coulomb corrections, giving the true R-dependent W(R). This requires
+    the quark EOS params.
 
     Parameters
     ----------
@@ -445,6 +455,14 @@ def compute_energy_barrier(
         or (i_nB, i_YL, i_T) for trapped.
     R_values : array-like or None
         Radius array (fm). If None, auto-generated from 0 to 5*R_c.
+    params : AlphaBagParams or None
+        Quark EOS parameters. Required for 'coulomb_minimize'.
+    quark_phase : str
+        'unpaired' or 'cfl'. Only used for 'coulomb_minimize'.
+    Delta0 : float or None
+        CFL pairing gap (MeV). Required if quark_phase='cfl'.
+    include_photons, include_gluons, include_thermal_neutrinos : bool
+        Only used for 'coulomb_minimize'.
 
     Returns
     -------
@@ -462,7 +480,82 @@ def compute_energy_barrier(
     Delta_F_full = driving_force(Qs, H)
     Delta_F = float(Delta_F_full[idx])
 
-    # Charge density for Coulomb modes
+    # ---- coulomb_minimize: solve Q* at each R ----
+    if electric_charge_mode == 'coulomb_minimize':
+        if params is None:
+            raise ValueError(
+                "params required for coulomb_minimize energy barrier")
+
+        from nucleation.solvers import solve_coulomb_at_R, solve_coulomb_cfl_at_R
+
+        R_c_val = float(q_d['R_c'][idx])
+
+        if R_values is None:
+            R_max = max(5.0 * R_c_val, 20.0) if np.isfinite(R_c_val) else 20.0
+            R_values = np.linspace(0, R_max, 500)
+        R_values = np.asarray(R_values, dtype=float)
+
+        # Scalar H at this grid point
+        H_point = SimpleNamespace(
+            T=float(H.T[idx]),
+            mu_B=float(H.mu_B[idx]),
+            mu_C=float(H.mu_C[idx]),
+            mu_S=float(H.mu_S[idx]),
+            mu_e=float(H.mu_e[idx]),
+            mu_nu=float(H.mu_nu[idx]),
+            P_total=float(H.P_total[idx]),
+        )
+
+        W_bulk = np.full_like(R_values, np.nan)
+        W_surface = 4.0 * np.pi * R_values**2 * sigma
+        W_coul = np.full_like(R_values, np.nan)
+
+        guess = None
+        dnC_at_Rc = 0.0
+        for i, R in enumerate(R_values):
+            if R <= 0:
+                W_bulk[i] = 0.0
+                W_coul[i] = 0.0
+                continue
+
+            if quark_phase == 'cfl':
+                result = solve_coulomb_cfl_at_R(
+                    R, H_point, params, Delta0, sigma,
+                    include_photons, include_gluons,
+                    include_thermal_neutrinos, initial_guess=guess)
+            else:
+                result = solve_coulomb_at_R(
+                    R, H_point, params, sigma,
+                    include_photons, include_gluons,
+                    include_thermal_neutrinos, initial_guess=guess)
+
+            if result is not None:
+                dnC_R = (result.Y_C - result.Y_e) * result.n_B
+                W_bulk[i] = -4.0/3.0 * np.pi * R**3 * (
+                    result.P_total - H_point.P_total)
+                W_coul[i] = float(coulomb_W(R, dnC_R))
+                guess = np.array([
+                    result.mu_u, result.mu_d, result.mu_s, result.mu_e])
+                if abs(R - R_c_val) < (R_values[1] - R_values[0]):
+                    dnC_at_Rc = dnC_R
+
+        W_total = W_bulk + W_surface + W_coul
+        W_c_val = float(np.nanmax(W_total)) if np.any(np.isfinite(W_total)) else np.nan
+
+        return EnergyBarrierResult(
+            R=R_values,
+            W=W_total,
+            W_bulk=W_bulk,
+            W_surface=W_surface,
+            W_coulomb=W_coul,
+            Delta_F=Delta_F,
+            delta_n_C=dnC_at_Rc,
+            sigma=sigma,
+            R_c=R_c_val,
+            W_c=W_c_val,
+        )
+
+    # ---- Analytical modes: lcn, gcn, gcn_coulomb ----
     if electric_charge_mode in ('lcn', 'gcn'):
         dnC = 0.0
         R_c_val = float(critical_radius(Delta_F, sigma))
@@ -470,10 +563,6 @@ def compute_energy_barrier(
     elif electric_charge_mode == 'gcn_coulomb':
         dnC = float((Qs.Y_C[idx] - Qs.Y_e[idx]) * Qs.n_B[idx])
         R_c_val = float(critical_radius_coulomb(Delta_F, sigma, dnC))
-        W_c_val = float(work_of_formation(R_c_val, Delta_F, sigma, dnC))
-    elif electric_charge_mode == 'coulomb_minimize':
-        dnC = float((Qs.Y_C[idx] - Qs.Y_e[idx]) * Qs.n_B[idx])
-        R_c_val = float(q_d['R_c'][idx])
         W_c_val = float(work_of_formation(R_c_val, Delta_F, sigma, dnC))
     else:
         raise ValueError(f"Invalid electric_charge_mode: '{electric_charge_mode}'")
@@ -528,20 +617,33 @@ def _find_T_root_1d(T_arr, tau_slice, log_tau_target, prev_T):
     if len(sign_changes) == 0:
         return np.nan, False
 
-    # Pick bracket closest to previous solution
-    if prev_T is not None and len(sign_changes) > 1:
-        midpoints = 0.5 * (T_valid[sign_changes] + T_valid[sign_changes + 1])
-        j = sign_changes[np.argmin(np.abs(midpoints - prev_T))]
-    else:
-        j = sign_changes[0]
+    # Fast path: if we have a previous solution, try root_scalar with
+    # prev_T as initial guess (secant method, no bracket needed)
+    if prev_T is not None:
+        try:
+            sol = root_scalar(f_interp, x0=prev_T, method='secant',
+                              x1=prev_T * 1.01)
+            if sol.converged and T_valid[0] <= sol.root <= T_valid[-1]:
+                # Verify it's a downward crossing (tau dropping below target)
+                eps = (T_valid[-1] - T_valid[0]) * 1e-4
+                if f_interp(sol.root - eps) > 0 and f_interp(sol.root + eps) < 0:
+                    return sol.root, True
+        except (ValueError, RuntimeError):
+            pass
 
+    # Fallback: scan sign changes for downward crossings
+    # (tau drops below tau_target, i.e. diff goes from + to -)
+    downward = [sc for sc in sign_changes if diff[sc] > 0 and diff[sc + 1] < 0]
+    if len(downward) == 0:
+        return np.nan, False
+
+    # Pick the first downward crossing (lowest T)
+    j = downward[0]
     T_lo = float(T_valid[j])
     T_hi = float(T_valid[j + 1])
 
     try:
-        sol = root_scalar(f_interp, bracket=[T_lo, T_hi],
-                          x0=prev_T if prev_T is not None else 0.5 * (T_lo + T_hi),
-                          method='brentq')
+        sol = root_scalar(f_interp, bracket=[T_lo, T_hi], method='brentq')
         if sol.converged:
             return sol.root, True
     except (ValueError, RuntimeError):
