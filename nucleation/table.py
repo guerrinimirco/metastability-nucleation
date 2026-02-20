@@ -37,7 +37,7 @@ _BASE_DATA_KEYS = [
     'P_total', 'e_total', 's_total', 'f_total',
 ]
 
-_COULOMB_EXTRA_KEYS = ['R_c', 'delta_n_C']
+_COULOMB_EXTRA_KEYS = ['R_c']
 
 
 # =============================================================================
@@ -48,7 +48,7 @@ class QstarTableData:
     """Q* nucleation table.
 
     Maps hadronic conditions (n_B_H, T, ...) to Q* quark droplet thermodynamics.
-    Optionally includes Coulomb fields (R_c, delta_n_C).
+    Optionally includes Coulomb field R_c.
     """
     eq_type: str            # 'beta_eq', 'trapped_neutrinos', 'fixed_yc'
     hadronic_grids: dict    # {n_B_H: array, T: array, ...}
@@ -92,7 +92,6 @@ def _store_result(data, idx, result, current_guess):
     if isinstance(result, tuple):
         eos_result, R_c = result
         data['R_c'][idx] = R_c
-        data['delta_n_C'][idx] = (eos_result.Y_C - eos_result.Y_e) * eos_result.n_B
         guess_extra = [R_c]
     else:
         eos_result = result
@@ -175,7 +174,7 @@ def compute_Qstar_table(hadronic_table, solver_fn, include_coulomb=False,
         Signature: solver_fn(H, initial_guess=...) -> result or None.
         Result is an EOS result object or (result, R_c) tuple for Coulomb.
     include_coulomb : bool
-        If True, data dict includes R_c and delta_n_C.
+        If True, data dict includes R_c.
     initial_guess : array-like or None
     verbose : bool
     save_table : bool

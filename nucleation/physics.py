@@ -1,5 +1,5 @@
 """
-Classical Nucleation Theory (CNT) for the hadron-to-quark phase transition.
+Nucleation theory for the hadron-to-quark phase transition.
 
 Composable functions for computing nucleation observables:
 
