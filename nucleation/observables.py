@@ -39,7 +39,6 @@ Usage
 import numpy as np
 from types import SimpleNamespace
 from dataclasses import dataclass
-from functools import partial
 from scipy.interpolate import interp1d
 from scipy.optimize import root_scalar
 
@@ -218,46 +217,26 @@ def _compute_Qstar(hadronic_table, params, sigma,
                    flavor_mode, electric_charge_mode,
                    include_photons, include_gluons, include_thermal_neutrinos,
                    initial_guess, verbose):
-    """Dispatch to appropriate Q* solver via functools.partial + generic grid loop."""
-    from nucleation.solvers import (
-        solve_frozen, solve_saddlepoint, solve_saddlepoint_cfl,
-        solve_coulomb, solve_coulomb_cfl,
-    )
+    """Dispatch to appropriate Q* solver via build_solver_fn + generic grid loop."""
+    from nucleation.solvers import build_solver_fn
 
-    charge_neutrality = 'local' if electric_charge_mode == 'lcn' else 'global'
-    common_kw = dict(
+    solver_fn, include_coulomb = build_solver_fn(
+        flavor_mode=flavor_mode,
+        electric_charge_mode=electric_charge_mode,
+        params=params,
+        quark_phase=quark_phase,
+        Delta0=Delta0,
+        sigma=sigma,
         include_photons=include_photons,
         include_gluons=include_gluons,
         include_thermal_neutrinos=include_thermal_neutrinos,
     )
-
-    if flavor_mode == 'frozen':
-        solver_fn = partial(solve_frozen, params=params,
-                            charge_neutrality=charge_neutrality, **common_kw)
-        return compute_Qstar_table(hadronic_table, solver_fn,
-                                   initial_guess=initial_guess, verbose=verbose)
-
-    # saddlepoint modes (lcn, gcn, gcn_coulomb)
-    if electric_charge_mode in ('lcn', 'gcn', 'gcn_coulomb'):
-        if quark_phase == 'cfl':
-            solver_fn = partial(solve_saddlepoint_cfl, params=params,
-                                Delta0=Delta0,
-                                charge_neutrality=charge_neutrality, **common_kw)
-        else:
-            solver_fn = partial(solve_saddlepoint, params=params,
-                                charge_neutrality=charge_neutrality, **common_kw)
-        return compute_Qstar_table(hadronic_table, solver_fn,
-                                   initial_guess=initial_guess, verbose=verbose)
-
-    # coulomb_minimize
-    if quark_phase == 'cfl':
-        solver_fn = partial(solve_coulomb_cfl, params=params, Delta0=Delta0,
-                            sigma=sigma, **common_kw)
-    else:
-        solver_fn = partial(solve_coulomb, params=params, sigma=sigma, **common_kw)
-    return compute_Qstar_table(hadronic_table, solver_fn,
-                               include_coulomb=True,
-                               initial_guess=initial_guess, verbose=verbose)
+    return compute_Qstar_table(
+        hadronic_table, solver_fn,
+        include_coulomb=include_coulomb,
+        initial_guess=initial_guess,
+        verbose=verbose,
+    )
 
 
 # =============================================================================

@@ -11,6 +11,7 @@ Public API:
     build_Qstar_interpolators       — build interpolators from Q* table
     compute_Qstar_table             — generic grid computation
     export_table                    — export Q* table to .dat file
+    build_solver_fn                 — build solver callable from mode strings
 """
 
 from nucleation.observables import (
@@ -30,4 +31,5 @@ from nucleation.table import (
     compute_Qstar_table,
     export_table,
 )
+from nucleation.solvers import build_solver_fn
 from nucleation.quantum import QuantumNucleationResult

@@ -536,3 +536,97 @@ def work_of_formation_coulomb_at_R(R, H, params, sigma,
          + coulomb_W(R, delta_n_C))
 
     return W
+
+
+# =============================================================================
+# Solver dispatch
+# =============================================================================
+def build_solver_fn(flavor_mode, electric_charge_mode, params,
+                    quark_phase='unpaired', Delta0=None, sigma=None,
+                    include_photons=True, include_gluons=True,
+                    include_thermal_neutrinos=True):
+    """Build a solver callable from string-based mode arguments.
+
+    Maps (flavor_mode, electric_charge_mode, quark_phase) to the appropriate
+    solver function, binding all required parameters via functools.partial.
+
+    Parameters
+    ----------
+    flavor_mode : str
+        'frozen' or 'saddlepoint'.
+    electric_charge_mode : str
+        'lcn', 'gcn', 'gcn_coulomb', or 'coulomb_minimize'.
+    params : AlphaBagParams
+        Quark EOS parameters.
+    quark_phase : str
+        'unpaired' or 'cfl'. Default 'unpaired'.
+    Delta0 : float or None
+        CFL pairing gap (MeV). Required if quark_phase='cfl'.
+    sigma : float or None
+        Surface tension (MeV/fm^2). Required for 'coulomb_minimize'.
+    include_photons, include_gluons, include_thermal_neutrinos : bool
+        Default True.
+
+    Returns
+    -------
+    solver_fn : callable
+        Solver with signature solver_fn(H, initial_guess=None).
+    include_coulomb : bool
+        Whether the solver produces Coulomb output (R_c).
+    """
+    from functools import partial
+
+    valid_flavor = ('frozen', 'saddlepoint')
+    valid_charge = ('lcn', 'gcn', 'gcn_coulomb', 'coulomb_minimize')
+    if flavor_mode not in valid_flavor:
+        raise ValueError(
+            f"Invalid flavor_mode: '{flavor_mode}'. Valid: {list(valid_flavor)}")
+    if electric_charge_mode not in valid_charge:
+        raise ValueError(
+            f"Invalid electric_charge_mode: '{electric_charge_mode}'. "
+            f"Valid: {list(valid_charge)}")
+    if flavor_mode == 'frozen':
+        if electric_charge_mode not in ('lcn', 'gcn'):
+            raise ValueError(
+                f"frozen flavor_mode only supports 'lcn' or 'gcn', "
+                f"got '{electric_charge_mode}'")
+        if quark_phase == 'cfl':
+            raise ValueError(
+                "frozen flavor_mode does not support quark_phase='cfl'")
+    if quark_phase == 'cfl' and Delta0 is None:
+        raise ValueError("Delta0 must be provided when quark_phase='cfl'")
+    if electric_charge_mode == 'coulomb_minimize' and sigma is None:
+        raise ValueError(
+            "sigma must be provided for electric_charge_mode='coulomb_minimize'")
+
+    charge_neutrality = 'local' if electric_charge_mode == 'lcn' else 'global'
+    common_kw = dict(
+        include_photons=include_photons,
+        include_gluons=include_gluons,
+        include_thermal_neutrinos=include_thermal_neutrinos,
+    )
+
+    if flavor_mode == 'frozen':
+        solver_fn = partial(solve_frozen, params=params,
+                            charge_neutrality=charge_neutrality, **common_kw)
+        return solver_fn, False
+
+    # saddlepoint modes (lcn, gcn, gcn_coulomb)
+    if electric_charge_mode in ('lcn', 'gcn', 'gcn_coulomb'):
+        if quark_phase == 'cfl':
+            solver_fn = partial(solve_saddlepoint_cfl, params=params,
+                                Delta0=Delta0,
+                                charge_neutrality=charge_neutrality, **common_kw)
+        else:
+            solver_fn = partial(solve_saddlepoint, params=params,
+                                charge_neutrality=charge_neutrality, **common_kw)
+        return solver_fn, False
+
+    # coulomb_minimize
+    if quark_phase == 'cfl':
+        solver_fn = partial(solve_coulomb_cfl, params=params, Delta0=Delta0,
+                            sigma=sigma, **common_kw)
+    else:
+        solver_fn = partial(solve_coulomb, params=params,
+                            sigma=sigma, **common_kw)
+    return solver_fn, True

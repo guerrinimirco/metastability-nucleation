@@ -160,34 +160,112 @@ def _build_H_at_point(hadronic_table, eq_type, idx, grid_values):
 # =============================================================================
 # Generic grid computation
 # =============================================================================
-def compute_Qstar_table(hadronic_table, solver_fn, include_coulomb=False,
+def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
                         initial_guess=None, verbose=False,
                         save_table=False, output_file=None,
                         export_params=None, export_charge_neutrality=None,
-                        export_sigma=None):
+                        export_sigma=None,
+                        # String-based dispatch (alternative to solver_fn)
+                        flavor_mode=None, electric_charge_mode=None,
+                        params=None, quark_phase='unpaired', Delta0=None,
+                        sigma=None,
+                        include_photons=True, include_gluons=True,
+                        include_thermal_neutrinos=True):
     """Compute Q* table over the hadronic grid for any eq_type.
+
+    Can be called in two ways:
+
+    1. **Callable interface** (full control)::
+
+        solver_fn = partial(solve_saddlepoint, params=params, ...)
+        table = compute_Qstar_table(hadronic_table, solver_fn)
+
+    2. **String-based dispatch** (convenient)::
+
+        table = compute_Qstar_table(
+            hadronic_table,
+            flavor_mode='saddlepoint',
+            electric_charge_mode='gcn',
+            params=my_params,
+        )
 
     Parameters
     ----------
     hadronic_table : EOSTableData
-    solver_fn : callable
+    solver_fn : callable or None
         Signature: solver_fn(H, initial_guess=...) -> result or None.
         Result is an EOS result object or (result, R_c) tuple for Coulomb.
+        Mutually exclusive with flavor_mode/electric_charge_mode.
     include_coulomb : bool
-        If True, data dict includes R_c.
+        If True, data dict includes R_c. Auto-set when using string dispatch.
     initial_guess : array-like or None
     verbose : bool
     save_table : bool
     output_file : str or None
     export_params : AlphaBagParams or None
-        Required if save_table=True.
+        Required if save_table=True. Auto-set from params in string dispatch.
     export_charge_neutrality : str or None
     export_sigma : float or None
+    flavor_mode : str or None
+        'frozen' or 'saddlepoint'. Used with string-based dispatch.
+    electric_charge_mode : str or None
+        'lcn', 'gcn', 'gcn_coulomb', or 'coulomb_minimize'.
+    params : AlphaBagParams or None
+        Quark EOS parameters. Required for string dispatch.
+    quark_phase : str
+        'unpaired' or 'cfl'. Default 'unpaired'.
+    Delta0 : float or None
+        CFL pairing gap (MeV). Required if quark_phase='cfl'.
+    sigma : float or None
+        Surface tension (MeV/fm^2). Required for 'coulomb_minimize'.
+    include_photons, include_gluons, include_thermal_neutrinos : bool
+        Default True.
 
     Returns
     -------
     QstarTableData
     """
+    # ---- Resolve solver_fn ----
+    if solver_fn is not None and flavor_mode is not None:
+        raise ValueError(
+            "Cannot specify both 'solver_fn' and 'flavor_mode'. "
+            "Use either the callable interface or string-based dispatch.")
+
+    if solver_fn is None:
+        if flavor_mode is None:
+            raise TypeError(
+                "compute_Qstar_table() requires either 'solver_fn' (callable) "
+                "or 'flavor_mode' + 'electric_charge_mode' (string dispatch).")
+        if electric_charge_mode is None:
+            raise TypeError(
+                "'electric_charge_mode' is required for string-based dispatch.")
+        if params is None:
+            raise TypeError(
+                "'params' is required for string-based dispatch.")
+
+        from nucleation.solvers import build_solver_fn
+        solver_fn, include_coulomb = build_solver_fn(
+            flavor_mode=flavor_mode,
+            electric_charge_mode=electric_charge_mode,
+            params=params,
+            quark_phase=quark_phase,
+            Delta0=Delta0,
+            sigma=sigma,
+            include_photons=include_photons,
+            include_gluons=include_gluons,
+            include_thermal_neutrinos=include_thermal_neutrinos,
+        )
+
+        # Auto-fill export metadata when using string dispatch
+        if save_table:
+            if export_params is None:
+                export_params = params
+            if export_charge_neutrality is None:
+                export_charge_neutrality = (
+                    'local' if electric_charge_mode == 'lcn' else 'global')
+            if export_sigma is None and electric_charge_mode == 'coulomb_minimize':
+                export_sigma = sigma
+
     eq_type = hadronic_table.eq_type
     grids = hadronic_table.grids
     n_B_arr = grids['n_B']
