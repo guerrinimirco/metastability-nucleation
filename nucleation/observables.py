@@ -465,6 +465,23 @@ def compute_energy_barrier(
             raise ValueError(
                 "params required for coulomb_minimize energy barrier")
 
+        # Early exit check for unfavorable driving force
+        if Delta_F <= 0:
+            # Return barrier result with NaNs - no favorable driving force
+            R_values_default = np.linspace(0, 20.0, 500) if R_values is None else np.asarray(R_values, dtype=float)
+            return EnergyBarrierResult(
+                R=R_values_default,
+                W=np.full_like(R_values_default, np.nan),
+                W_bulk=np.full_like(R_values_default, np.nan),
+                W_surface=surface_W(R_values_default, sigma),
+                W_coulomb=np.full_like(R_values_default, np.nan),
+                Delta_F=Delta_F,
+                delta_n_C=0.0,
+                sigma=sigma,
+                R_c=np.nan,
+                W_c=np.nan,
+            )
+
         from nucleation.solvers import solve_coulomb_at_R, solve_coulomb_cfl_at_R
 
         R_c_val = float(q_d['R_c'][idx])

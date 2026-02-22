@@ -287,7 +287,12 @@ def solve_coulomb(H, params, sigma,
         mu_nu=H.mu_nu,
     )
     Delta_P_guess = Qs_guess.P_total - H.P_total
-    R_guess = 2.0 * sigma / Delta_P_guess if Delta_P_guess > 0 else 1.0
+
+    # Early exit check for unfavorable driving force
+    if Delta_P_guess <= 0:
+        return None  # Skip expensive solve when quark phase not favored
+
+    R_guess = 2.0 * sigma / Delta_P_guess
     h_guess = np.array([mu_u_h, mu_d_h, mu_s_h, H.mu_e, R_guess])
 
     guess = initial_guess if initial_guess is not None else h_guess
@@ -419,7 +424,12 @@ def solve_coulomb_cfl(H, params, Delta0, sigma,
         mu_nu=H.mu_nu,
     )
     Delta_P_guess = Qs_guess.P_total - H.P_total
-    R_guess = 2.0 * sigma / Delta_P_guess if Delta_P_guess > 0 else 1.0
+
+    # Early exit check for unfavorable driving force
+    if Delta_P_guess <= 0:
+        return None  # Skip expensive solve when quark phase not favored
+
+    R_guess = 2.0 * sigma / Delta_P_guess
     h_guess = np.array([mu_u_h, mu_d_h, mu_s_h, H.mu_e, R_guess])
 
     guess = initial_guess if initial_guess is not None else h_guess
