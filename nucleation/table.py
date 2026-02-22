@@ -165,6 +165,7 @@ def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
                         save_table=False, output_file=None,
                         export_params=None, export_charge_neutrality=None,
                         export_sigma=None,
+                        pre_filter_mask=None,
                         # String-based dispatch (alternative to solver_fn)
                         flavor_mode=None, electric_charge_mode=None,
                         params=None, quark_phase='unpaired', Delta0=None,
@@ -206,6 +207,10 @@ def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
         Required if save_table=True. Auto-set from params in string dispatch.
     export_charge_neutrality : str or None
     export_sigma : float or None
+    pre_filter_mask : ndarray of bool or None
+        Optional boolean array matching grid shape. If provided, grid points
+        where pre_filter_mask[idx] is True will be skipped (solver not called).
+        Use this to avoid expensive solves in regions known to be unfavorable.
     flavor_mode : str or None
         'frozen' or 'saddlepoint'. Used with string-based dispatch.
     electric_charge_mode : str or None
@@ -314,7 +319,14 @@ def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
                     gv = {'T': T_arr[i_T], 'Y_C': outer_arr[i_outer]}
 
                 H = _build_H_at_point(hadronic_table, eq_type, idx, gv)
-                result = solver_fn(H, initial_guess=current_guess)
+
+                # Check pre-filter condition
+                if pre_filter_mask is not None and pre_filter_mask[idx]:
+                    # Skip this point - pre-filter indicates unfavorable conditions
+                    # Data remains NaN, converged[idx] stays False
+                    result = None
+                else:
+                    result = solver_fn(H, initial_guess=current_guess)
 
                 current_guess = _store_result(data, idx, result, current_guess)
                 if result is not None:

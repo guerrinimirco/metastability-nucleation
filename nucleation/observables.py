@@ -216,7 +216,8 @@ def _compute_Qstar(hadronic_table, params, sigma,
                    quark_phase, Delta0,
                    flavor_mode, electric_charge_mode,
                    include_photons, include_gluons, include_thermal_neutrinos,
-                   initial_guess, verbose):
+                   initial_guess, verbose,
+                   pre_filter_mask=None):
     """Dispatch to appropriate Q* solver via build_solver_fn + generic grid loop."""
     from nucleation.solvers import build_solver_fn
 
@@ -236,6 +237,7 @@ def _compute_Qstar(hadronic_table, params, sigma,
         include_coulomb=include_coulomb,
         initial_guess=initial_guess,
         verbose=verbose,
+        pre_filter_mask=pre_filter_mask,
     )
 
 
@@ -321,16 +323,69 @@ def compute_nucleation_observables(
     if Qstar_table is None:
         if params is None:
             raise ValueError("params must be provided when Qstar_table is None")
-        if verbose:
-            print(f"Computing Q* table (flavor={flavor_mode}, "
-                  f"charge={electric_charge_mode}, phase={quark_phase})...")
-        Qstar_table = _compute_Qstar(
-            hadronic_table, params, sigma,
-            quark_phase, Delta0,
-            flavor_mode, electric_charge_mode,
-            include_photons, include_gluons, include_thermal_neutrinos,
-            initial_guess, verbose,
-        )
+
+        # OPTIMIZATION: Two-pass approach for coulomb_minimize
+        if electric_charge_mode == 'coulomb_minimize':
+            if verbose:
+                print(f"Computing Q* table (two-pass optimization: "
+                      f"GCN pre-filter + coulomb_minimize)...")
+
+            # PASS 1: Compute GCN table (fast, no R optimization)
+            if verbose:
+                print(f"  [1/2] Computing GCN Q* table (flavor={flavor_mode})...")
+            gcn_table = _compute_Qstar(
+                hadronic_table, params, sigma,
+                quark_phase, Delta0,
+                flavor_mode, 'gcn',  # Use GCN for pre-filtering
+                include_photons, include_gluons, include_thermal_neutrinos,
+                initial_guess, verbose,
+            )
+
+            # Extract Delta_F from GCN table to create filter mask
+            gcn_data = gcn_table.data
+            shape = gcn_data['P_total'].shape
+            H_gcn, Qs_gcn = _build_phase_namespaces(hadronic_table, gcn_data, shape)
+
+            # Compute driving force from GCN results
+            Delta_F_gcn = driving_force(Qs_gcn, H_gcn)
+
+            # Create boolean filter: skip coulomb_minimize where GCN shows Delta_F <= 0
+            # Physics: coulomb_minimize always has Delta_F <= Delta_F_gcn
+            # (Coulomb repulsion makes nucleation less favorable)
+            pre_filter_mask = Delta_F_gcn <= 0
+
+            if verbose:
+                n_unfavorable = np.sum(pre_filter_mask)
+                total = np.prod(shape)
+                pct_skip = 100 * n_unfavorable / total
+                print(f"  GCN pre-filter: {n_unfavorable}/{total} "
+                      f"points unfavorable ({pct_skip:.1f}% will be skipped)")
+
+            # PASS 2: Compute coulomb_minimize table (expensive, but filtered)
+            if verbose:
+                n_to_solve = total - n_unfavorable
+                print(f"  [2/2] Computing coulomb_minimize Q* table "
+                      f"({n_to_solve} points after filtering)...")
+            Qstar_table = _compute_Qstar(
+                hadronic_table, params, sigma,
+                quark_phase, Delta0,
+                flavor_mode, 'coulomb_minimize',
+                include_photons, include_gluons, include_thermal_neutrinos,
+                initial_guess, verbose,
+                pre_filter_mask=pre_filter_mask,  # APPLY THE FILTER
+            )
+        else:
+            # Standard single-pass for other modes (lcn, gcn, gcn_coulomb)
+            if verbose:
+                print(f"Computing Q* table (flavor={flavor_mode}, "
+                      f"charge={electric_charge_mode}, phase={quark_phase})...")
+            Qstar_table = _compute_Qstar(
+                hadronic_table, params, sigma,
+                quark_phase, Delta0,
+                flavor_mode, electric_charge_mode,
+                include_photons, include_gluons, include_thermal_neutrinos,
+                initial_guess, verbose,
+            )
 
     # ---- Step 2: Build phase namespaces ----
     q_d = Qstar_table.data
