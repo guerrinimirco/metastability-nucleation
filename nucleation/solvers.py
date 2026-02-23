@@ -6,9 +6,9 @@ Equation systems for finding the quark droplet Q* thermodynamics.
 
 Three solver families:
 
-    Frozen       : Flavor fractions frozen from hadronic phase
-    Saddlepoint  : Minimization of W w.r.t. flavor composition (+ CFL variant)
-    Coulomb      : Full Coulomb minimization with R as unknown (+ CFL variant)
+    Frozen           : Flavor fractions frozen from hadronic phase
+    Saddlepoint      : Minimization of W w.r.t. flavor composition (+ CFL variant)
+    Minimize_Coulomb : As Saddlepoint, but with Coulomb energy in W (+ CFL variant)
 
 Shared utilities:
 
@@ -18,6 +18,7 @@ Shared utilities:
 
 import numpy as np
 from scipy.optimize import root
+
 from eos.alphabag.eos import (
     compute_alphabag_total_thermo_from_mu,
     compute_cfl_total_thermo_from_mu,
@@ -37,14 +38,14 @@ from nucleation.physics import (
 # Shared utilities
 # =============================================================================
 def hadronic_guess(H):
-    """Physics-based initial guess [mu_u, mu_d, mu_s, mu_e] from hadronic state."""
+    """Initial guess [mu_u, mu_d, mu_s, mu_e] from hadronic state."""
     mu_d_h = (H.mu_B - H.mu_C) / 3.0
     mu_u_h = (H.mu_B + 2.0 * H.mu_C) / 3.0
     mu_s_h = mu_d_h + H.mu_S
     return np.array([mu_u_h, mu_d_h, mu_s_h, H.mu_e])
 
 
-def robust_root(equations, guess, h_guess):
+def robust_root(equations, guess, h_guess, atol=1e-8):
     """Solve nonlinear system with fallback strategy.
 
     Strategy:
@@ -56,22 +57,23 @@ def robust_root(equations, guess, h_guess):
     Returns scipy OptimizeResult or None.
     """
     sol = root(equations, guess, method='hybr')
-    if sol.success:
+    if sol.success or np.max(np.abs(sol.fun)) < atol:
         return sol
 
     sol = root(equations, guess, method='lm')
-    if sol.success:
+    if sol.success or np.max(np.abs(sol.fun)) < atol:
         return sol
 
     if not np.allclose(guess[:len(h_guess)], h_guess):
         sol = root(equations, h_guess, method='hybr')
-        if sol.success:
+        if sol.success or np.max(np.abs(sol.fun)) < atol:
             return sol
         sol = root(equations, h_guess, method='lm')
-        if sol.success:
+        if sol.success or np.max(np.abs(sol.fun)) < atol:
             return sol
 
     return None
+
 
 
 # =============================================================================
@@ -84,10 +86,10 @@ def solve_frozen(H, params, charge_neutrality,
 
     4 unknowns: [mu_u, mu_d, mu_s, mu_e]
     4 equations:
-      1. Y_C_Qs = Y_C_H                    (frozen C)
-      2. Y_S_Qs = Y_S_H                    (frozen S)
-      3. charge neutrality (local or global)
-      4. saddlepoint on n_B
+      1. Y_C_Qs = Y_C_H                         (frozen charge)
+      2. Y_S_Qs = Y_S_H                         (frozen strangeness)
+      3. charge neutrality                       (local or global)
+      4. dW/dn_B = 0                             (saddlepoint)
 
     Returns AlphaBagEOSResult or None.
     """
@@ -99,16 +101,21 @@ def solve_frozen(H, params, charge_neutrality,
         if charge_neutrality == "local":
             charge_eq = Qs.n_C - e_Qs.n
             Y_e_Qs = e_Qs.n / Qs.n_B
-        else:  # global
+        elif charge_neutrality == "global":
             charge_eq = mu_e - H.mu_e
             Y_e_Qs = H.Y_e
+        else:
+            raise ValueError("charge_neutrality must be 'local' or 'global'")
 
         saddle = ((Qs.mu_B - H.mu_B)
                   + Qs.Y_C * (Qs.mu_C - H.mu_C)
                   + Qs.Y_S * (Qs.mu_S - H.mu_S)
-                  + Y_e_Qs * (mu_e - H.mu_e))
+                  + Y_e_Qs * (mu_e - H.mu_e)) # note: given other eqs. it reduces to Qs.mu_B - H.mu_B
 
-        return [Qs.Y_C - H.Y_C, Qs.Y_S - H.Y_S, charge_eq, saddle]
+        return [Qs.Y_C - H.Y_C,
+                Qs.Y_S - H.Y_S,
+                charge_eq / (Qs.n_B if charge_neutrality == "local" else H.mu_B),
+                saddle / H.mu_B]
 
     h_guess = hadronic_guess(H)
     guess = initial_guess if initial_guess is not None else h_guess
@@ -137,10 +144,10 @@ def solve_saddlepoint(H, params, charge_neutrality,
 
     4 unknowns: [mu_u, mu_d, mu_s, mu_e]
     4 equations:
-      1. mu_C_Qs + mu_e = mu_C_H + mu_e_H  (minimize wrt Y_C)
-      2. mu_S_Qs = mu_S_H                   (minimize wrt Y_S)
-      3. charge neutrality (local or global)
-      4. saddlepoint on n_B
+      1. mu_C_Qs + mu_e = mu_C_H + mu_e_H       (dW/dY_C = 0)
+      2. mu_S_Qs = mu_S_H                        (dW/dY_S = 0)
+      3. charge neutrality                        (local or global)
+      4. dW/dn_B = 0                              (saddlepoint)
 
     Returns AlphaBagEOSResult or None.
     """
@@ -152,19 +159,21 @@ def solve_saddlepoint(H, params, charge_neutrality,
 
         if charge_neutrality == "local":
             charge_eq = Qs.Y_C - Y_e_Qs
-        else:  # global
+        elif charge_neutrality == "global":
             charge_eq = mu_e - H.mu_e
+        else:
+            raise ValueError("charge_neutrality must be 'local' or 'global'")
 
         saddle = ((Qs.mu_B - H.mu_B)
                   + Qs.Y_C * (Qs.mu_C - H.mu_C)
                   + Qs.Y_S * (Qs.mu_S - H.mu_S)
-                  + Y_e_Qs * (mu_e - H.mu_e))
+                  + Y_e_Qs * (mu_e - H.mu_e)) # note: given other eqs. it reduces to Qs.mu_B - H.mu_B
 
         return [
-            Qs.mu_C + mu_e - (H.mu_C + H.mu_e),
-            Qs.mu_S - H.mu_S,
-            charge_eq,
-            saddle,
+            (Qs.mu_C + mu_e - (H.mu_C + H.mu_e)) / H.mu_B,
+            (Qs.mu_S - H.mu_S) / H.mu_B,
+            charge_eq / (Qs.n_B if charge_neutrality == "local" else H.mu_B),
+            saddle / H.mu_B,
         ]
 
     h_guess = hadronic_guess(H)
@@ -190,14 +199,14 @@ def solve_saddlepoint(H, params, charge_neutrality,
 def solve_saddlepoint_cfl(H, params, Delta0, charge_neutrality,
                           include_photons, include_gluons,
                           include_thermal_neutrinos, initial_guess=None):
-    """Solve for CFL Q* thermodynamics.
+    """Solve for CFL Q* by minimizing W w.r.t. flavor composition.
 
     4 unknowns: [mu_u, mu_d, mu_s, mu_e]
     4 equations:
-      1. Y_C_Qs = 0                        (CFL constraint)
-      2. Y_S_Qs = 1                        (CFL constraint)
-      3. charge neutrality (local or global)
-      4. saddlepoint on n_B
+      1. Y_C_Qs = 0                              (CFL constraint)
+      2. Y_S_Qs = 1                              (CFL constraint)
+      3. charge neutrality                        (local or global)
+      4. dW/dn_B = 0                              (saddlepoint)
 
     Returns CFLEOSResult or None.
     """
@@ -205,19 +214,24 @@ def solve_saddlepoint_cfl(H, params, Delta0, charge_neutrality,
         mu_u, mu_d, mu_s, mu_e = x
         Qs = compute_cfl_thermo_from_mu(mu_u, mu_d, mu_s, H.T, Delta0, params)
         e_Qs = electron_thermo(mu_e, H.T)
-        Y_e_Qs = e_Qs.n / Qs.n_B if Qs.n_B > 0 else 0.0
+        Y_e_Qs = e_Qs.n / Qs.n_B
 
         if charge_neutrality == "local":
             charge_eq = Qs.Y_C - Y_e_Qs
-        else:  # global
+        elif charge_neutrality == "global":
             charge_eq = mu_e - H.mu_e
+        else:
+            raise ValueError("charge_neutrality must be 'local' or 'global'")
 
         saddle = ((Qs.mu_B - H.mu_B)
                   + Qs.Y_C * (Qs.mu_C - H.mu_C)
                   + Qs.Y_S * (Qs.mu_S - H.mu_S)
                   + Y_e_Qs * (mu_e - H.mu_e))
 
-        return [Qs.Y_C, Qs.Y_S - 1.0, charge_eq, saddle]
+        return [Qs.Y_C,
+                Qs.Y_S - 1.0,
+                charge_eq / (Qs.n_B if charge_neutrality == "local" else H.mu_B),
+                saddle / H.mu_B]
 
     h_guess = hadronic_guess(H)
     guess = initial_guess if initial_guess is not None else h_guess
@@ -239,21 +253,31 @@ def solve_saddlepoint_cfl(H, params, Delta0, charge_neutrality,
 # =============================================================================
 # Coulomb solver (unpaired, full minimization including R)
 # =============================================================================
-def solve_coulomb(H, params, sigma,
+def solve_saddlepoint_minimizecoulomb(H, params, sigma,
                   include_photons, include_gluons,
                   include_thermal_neutrinos, initial_guess=None):
-    """Solve for Q* AND critical radius R* with Coulomb corrections.
+    """Solve for Q* and R* with Coulomb corrections.
 
     5 unknowns: [mu_u, mu_d, mu_s, mu_e, R]
     5 equations:
-      1. mu_B_Qs = mu_B_H                                       (saddle point)
-      2. mu_C_Qs + mu_e = mu_C_H + mu_e_H                      (minimize Y_C)
-      3. mu_S_Qs = mu_S_H                                       (minimize Y_S)
-      4. mu_e = mu_e_H + 8/5 alpha pi hc R^2 delta_n_C          (Coulomb GCN)
-      5. P_Qs - P_H - 2sigma/R + coulomb_delta_P = 0            (stationarity)
+      1. mu_B_Qs = mu_B_H                        (dW/dn_B = 0)
+      2. mu_C_Qs + mu_e = mu_C_H + mu_e_H        (dW/dY_C = 0)
+      3. mu_S_Qs = mu_S_H                         (dW/dY_S = 0)
+      4. mu_e = mu_e_H + coulomb_delta_mu_e        (Coulomb GCN)
+      5. P_Qs - P_H - 2sigma/R + dP_Coulomb = 0   (dW/dR = 0)
 
     Returns (AlphaBagEOSResult, R_c) or None.
     """
+
+    # If GCN saddle point has not R_c (H stable), then there is no point in compute solve_saddlepoint_minimizecoulomb
+    result_gcn = solve_saddlepoint(H, params, charge_neutrality='global', include_photons=include_photons, include_gluons=include_gluons,
+                     include_thermal_neutrinos=include_thermal_neutrinos)
+
+    if result_gcn is None or result_gcn.P_total <= H.P_total:
+        return None
+
+    # if R_c_gcn exist, then proceed with the computation of solve_saddlepoint_minimizecoulombs
+    
     def equations(x):
         mu_u, mu_d, mu_s, mu_e, R = x
         if R <= 0:
@@ -269,46 +293,44 @@ def solve_coulomb(H, params, sigma,
         delta_n_C = (Qs.Y_C - Qs.Y_e) * Qs.n_B
 
         return [
-            Qs.mu_B - H.mu_B,
-            Qs.mu_C + mu_e - (H.mu_C + H.mu_e),
-            Qs.mu_S - H.mu_S,
-            mu_e - coulomb_delta_mu_e(R, delta_n_C) - H.mu_e,
-            Qs.P_total - H.P_total - 2.0 * sigma / R + coulomb_delta_P(R, delta_n_C),
+            (Qs.mu_B - H.mu_B) / H.mu_B,
+            (Qs.mu_C + mu_e - (H.mu_C + H.mu_e)) / H.mu_B,
+            (Qs.mu_S - H.mu_S) / H.mu_B,
+            (mu_e - coulomb_delta_mu_e(R, delta_n_C) - H.mu_e) / H.mu_B,
+            (Qs.P_total - H.P_total - 2.0 * sigma / R + coulomb_delta_P(R, delta_n_C)) / H.P_total,
         ]
 
-    # Physics-based guess with R estimate
-    h_guess_4 = hadronic_guess(H)
-    mu_u_h, mu_d_h, mu_s_h = h_guess_4[0], h_guess_4[1], h_guess_4[2]
-    Qs_guess = compute_alphabag_total_thermo_from_mu(
-        mu_u_h, mu_d_h, mu_s_h, H.mu_e, H.T, params,
-        include_photons=include_photons,
-        include_gluons=include_gluons,
-        include_thermal_neutrinos=include_thermal_neutrinos,
-        mu_nu=H.mu_nu,
-    )
-    Delta_P_guess = Qs_guess.P_total - H.P_total
 
-    # Early exit check for unfavorable driving force
-    if Delta_P_guess <= 0:
-        return None  # Skip expensive solve when quark phase not favored
+    # compute R_c_gcn as guess for R_c_minimizecoulomb
+    R_c_gcn = 2.0 * sigma / (result_gcn.P_total - H.P_total)
+    mu_d_gcn = result_gcn.mu_d
+    mu_u_gcn = result_gcn.mu_u
+    mu_s_gcn = result_gcn.mu_s
+    guess_gcn = np.array([mu_u_gcn, mu_d_gcn, mu_s_gcn, result_gcn.mu_e, R_c_gcn])
+    h_guess = guess_gcn
 
-    R_guess = 2.0 * sigma / Delta_P_guess
-    h_guess = np.array([mu_u_h, mu_d_h, mu_s_h, H.mu_e, R_guess])
-
-    guess = initial_guess if initial_guess is not None else h_guess
-
+    # First attempt
+    guess = initial_guess if initial_guess is not None else guess_gcn
     sol = robust_root(equations, guess, h_guess)
+
+    # If failed, refine R guess using LCN
+    if sol is None:
+        result_lcn = solve_saddlepoint(H, params, charge_neutrality='local', include_photons=include_photons, include_gluons=include_gluons,
+                     include_thermal_neutrinos=include_thermal_neutrinos)
+        if result_lcn is not None and result_lcn.P_total > H.P_total:
+            R_c_lcn = 2.0 * sigma / (result_lcn.P_total - H.P_total)
+            R_mid = (R_c_gcn + R_c_lcn) / 2.0
+        else:
+            R_mid = (R_c_gcn + 200.0) / 2.0
+
+        guess_mid = np.array([mu_u_gcn, mu_d_gcn, mu_s_gcn, result_gcn.mu_e, R_mid])
+        h_guess_mid = np.append(hadronic_guess(H), R_mid)
+        sol = robust_root(equations, guess_mid, h_guess_mid)
+
     if sol is None:
         return None
 
     mu_u, mu_d, mu_s, mu_e, R_c = sol.x
-
-    if R_c <= 0:
-        return None
-
-    residual = np.sum(np.array(equations(sol.x))**2)
-    if residual > 1e-10:
-        return None
 
     result = compute_alphabag_total_thermo_from_mu(
         mu_u, mu_d, mu_s, mu_e, H.T, params,
@@ -323,17 +345,17 @@ def solve_coulomb(H, params, sigma,
 # =============================================================================
 # Coulomb solver at fixed R (for computing W(R))
 # =============================================================================
-def solve_coulomb_at_R(R, H, params, sigma,
+def solve_saddlepoint_minimizecoulomb_at_R(R, H, params, sigma,
                        include_photons, include_gluons,
                        include_thermal_neutrinos, initial_guess=None):
-    """Solve for Q* at given R with Coulomb corrections.
+    """Solve for Q* at fixed R with Coulomb corrections.
 
     4 unknowns: [mu_u, mu_d, mu_s, mu_e]
     4 equations:
-      1. mu_B_Qs = mu_B_H
-      2. mu_C_Qs + mu_e = mu_C_H + mu_e_H
-      3. mu_S_Qs = mu_S_H
-      4. mu_e = mu_e_H + coulomb_delta_mu_e(R, delta_n_C)
+      1. mu_B_Qs = mu_B_H                        (dW/dn_B = 0)
+      2. mu_C_Qs + mu_e = mu_C_H + mu_e_H        (dW/dY_C = 0)
+      3. mu_S_Qs = mu_S_H                         (dW/dY_S = 0)
+      4. mu_e = mu_e_H + coulomb_delta_mu_e        (Coulomb GCN)
 
     Returns AlphaBagEOSResult or None.
     """
@@ -350,10 +372,10 @@ def solve_coulomb_at_R(R, H, params, sigma,
         delta_n_C = (Qs.Y_C - Qs.Y_e) * Qs.n_B
 
         return [
-            Qs.mu_B - H.mu_B,
-            Qs.mu_C + mu_e - (H.mu_C + H.mu_e),
-            Qs.mu_S - H.mu_S,
-            mu_e - coulomb_delta_mu_e(R, delta_n_C) - H.mu_e,
+            (Qs.mu_B - H.mu_B) / H.mu_B,
+            (Qs.mu_C + mu_e - (H.mu_C + H.mu_e)) / H.mu_B,
+            (Qs.mu_S - H.mu_S) / H.mu_B,
+            (mu_e - coulomb_delta_mu_e(R, delta_n_C) - H.mu_e) / H.mu_B,
         ]
 
     h_guess = hadronic_guess(H)
@@ -376,21 +398,30 @@ def solve_coulomb_at_R(R, H, params, sigma,
 # =============================================================================
 # CFL Coulomb solver (full minimization including R)
 # =============================================================================
-def solve_coulomb_cfl(H, params, Delta0, sigma,
+def solve_saddlepoint_minimizecoulomb_cfl(H, params, Delta0, sigma,
                       include_photons, include_gluons,
                       include_thermal_neutrinos, initial_guess=None):
-    """Solve for CFL Q* AND R* with Coulomb corrections.
+    """Solve for CFL Q* and R* with Coulomb corrections.
 
     5 unknowns: [mu_u, mu_d, mu_s, mu_e, R]
     5 equations:
-      1. Y_C_Qs = 0                                              (CFL)
-      2. Y_S_Qs = 1                                              (CFL)
-      3. mu_e = mu_e_H + coulomb_delta_mu_e(R, delta_n_C)        (Coulomb GCN)
-      4. mu_B_Qs = mu_B_H                                        (saddle point)
-      5. P_Qs - P_H - 2sigma/R + coulomb_delta_P = 0             (stationarity)
+      1. Y_C_Qs = 0                               (CFL constraint)
+      2. Y_S_Qs = 1                                (CFL constraint)
+      3. mu_e = mu_e_H + coulomb_delta_mu_e        (Coulomb GCN)
+      4. mu_B_Qs = mu_B_H                          (dW/dn_B = 0)
+      5. P_Qs - P_H - 2sigma/R + dP_Coulomb = 0   (dW/dR = 0)
 
     Returns (CFLEOSResult, R_c) or None.
     """
+
+    # If GCN saddle point has not R_c (H stable), then there is no point in compute solve_saddlepoint_minimizecoulomb
+    result_gcn = solve_saddlepoint_cfl(H, params, Delta0, charge_neutrality='global',
+                     include_photons=include_photons, include_gluons=include_gluons,
+                     include_thermal_neutrinos=include_thermal_neutrinos)
+
+    if result_gcn is None or result_gcn.P_total <= H.P_total:
+        return None
+
     def equations(x):
         mu_u, mu_d, mu_s, mu_e, R = x
         if R <= 0:
@@ -408,44 +439,41 @@ def solve_coulomb_cfl(H, params, Delta0, sigma,
         return [
             Qs.Y_C,
             Qs.Y_S - 1.0,
-            mu_e - coulomb_delta_mu_e(R, delta_n_C) - H.mu_e,
-            Qs.mu_B - H.mu_B,
-            Qs.P_total - H.P_total - 2.0 * sigma / R + coulomb_delta_P(R, delta_n_C),
+            (mu_e - coulomb_delta_mu_e(R, delta_n_C) - H.mu_e) / H.mu_B,
+            (Qs.mu_B - H.mu_B) / H.mu_B,
+            (Qs.P_total - H.P_total - 2.0 * sigma / R + coulomb_delta_P(R, delta_n_C)) / H.P_total,
         ]
 
-    # Physics-based guess with R estimate
-    h_guess_4 = hadronic_guess(H)
-    mu_u_h, mu_d_h, mu_s_h = h_guess_4[0], h_guess_4[1], h_guess_4[2]
-    Qs_guess = compute_cfl_total_thermo_from_mu(
-        mu_u_h, mu_d_h, mu_s_h, H.mu_e, H.T, Delta0, params,
-        include_photons=include_photons,
-        include_gluons=include_gluons,
-        include_thermal_neutrinos=include_thermal_neutrinos,
-        mu_nu=H.mu_nu,
-    )
-    Delta_P_guess = Qs_guess.P_total - H.P_total
+    # compute R_c_gcn as guess for R_c_minimizecoulomb
+    R_c_gcn = 2.0 * sigma / (result_gcn.P_total - H.P_total)
+    guess_gcn = np.array([result_gcn.mu_u, result_gcn.mu_d, result_gcn.mu_s,
+                          result_gcn.mu_e, R_c_gcn])
+    h_guess = guess_gcn
 
-    # Early exit check for unfavorable driving force
-    if Delta_P_guess <= 0:
-        return None  # Skip expensive solve when quark phase not favored
-
-    R_guess = 2.0 * sigma / Delta_P_guess
-    h_guess = np.array([mu_u_h, mu_d_h, mu_s_h, H.mu_e, R_guess])
-
-    guess = initial_guess if initial_guess is not None else h_guess
-
+    # First attempt
+    guess = initial_guess if initial_guess is not None else guess_gcn
     sol = robust_root(equations, guess, h_guess)
+
+    # If failed, refine R guess using LCN
+    if sol is None:
+        result_lcn = solve_saddlepoint_cfl(H, params, Delta0, charge_neutrality='local',
+                         include_photons=include_photons, include_gluons=include_gluons,
+                         include_thermal_neutrinos=include_thermal_neutrinos)
+        if result_lcn is not None and result_lcn.P_total > H.P_total:
+            R_c_lcn = 2.0 * sigma / (result_lcn.P_total - H.P_total)
+            R_mid = (R_c_gcn + R_c_lcn) / 2.0
+        else:
+            R_mid = (R_c_gcn + 200.0) / 2.0
+
+        guess_mid = np.array([result_gcn.mu_u, result_gcn.mu_d, result_gcn.mu_s,
+                              result_gcn.mu_e, R_mid])
+        h_guess_mid = np.append(hadronic_guess(H), R_mid)
+        sol = robust_root(equations, guess_mid, h_guess_mid)
+
     if sol is None:
         return None
 
     mu_u, mu_d, mu_s, mu_e, R_c = sol.x
-
-    if R_c <= 0:
-        return None
-
-    residual = np.sum(np.array(equations(sol.x))**2)
-    if residual > 1e-10:
-        return None
 
     result = compute_cfl_total_thermo_from_mu(
         mu_u, mu_d, mu_s, mu_e, H.T, Delta0, params,
@@ -460,17 +488,17 @@ def solve_coulomb_cfl(H, params, Delta0, sigma,
 # =============================================================================
 # CFL Coulomb solver at fixed R
 # =============================================================================
-def solve_coulomb_cfl_at_R(R, H, params, Delta0, sigma,
+def solve_saddlepoint_minimizecoulomb_cfl_at_R(R, H, params, Delta0, sigma,
                            include_photons, include_gluons,
                            include_thermal_neutrinos, initial_guess=None):
-    """Solve for CFL Q* at given R with Coulomb corrections.
+    """Solve for CFL Q* at fixed R with Coulomb corrections.
 
     4 unknowns: [mu_u, mu_d, mu_s, mu_e]
     4 equations:
-      1. Y_C_Qs = 0
-      2. Y_S_Qs = 1
-      3. mu_e = mu_e_H + coulomb_delta_mu_e(R, delta_n_C)
-      4. mu_B_Qs = mu_B_H
+      1. Y_C_Qs = 0                               (CFL constraint)
+      2. Y_S_Qs = 1                                (CFL constraint)
+      3. mu_e = mu_e_H + coulomb_delta_mu_e        (Coulomb GCN)
+      4. mu_B_Qs = mu_B_H                          (dW/dn_B = 0)
 
     Returns CFLEOSResult or None.
     """
@@ -489,8 +517,8 @@ def solve_coulomb_cfl_at_R(R, H, params, Delta0, sigma,
         return [
             Qs.Y_C,
             Qs.Y_S - 1.0,
-            mu_e - coulomb_delta_mu_e(R, delta_n_C) - H.mu_e,
-            Qs.mu_B - H.mu_B,
+            (mu_e - coulomb_delta_mu_e(R, delta_n_C) - H.mu_e) / H.mu_B,
+            (Qs.mu_B - H.mu_B) / H.mu_B,
         ]
 
     h_guess = hadronic_guess(H)
@@ -511,27 +539,27 @@ def solve_coulomb_cfl_at_R(R, H, params, Delta0, sigma,
 
 
 # =============================================================================
-# Work of formation at given R (with Coulomb)
+# Work of formation at given R (with Coulomb) ??????????????????????????????????????
 # =============================================================================
 def work_of_formation_coulomb_at_R(R, H, params, sigma,
                                    include_photons=True, include_gluons=True,
                                    include_thermal_neutrinos=True,
                                    quark_phase='unpaired', Delta0=None,
                                    initial_guess=None):
-    """Work of formation W(R) with Coulomb corrections.
+    """Compute work of formation W(R) with Coulomb corrections.
 
-    Solves the Coulomb-corrected equations at given R, then computes:
-    W(R) = -4/3 pi R^3 (P_Qs - P_H) + 4 pi R^2 sigma + W_Coulomb(R)
+    Solves the Coulomb-corrected equations at fixed R, then computes:
+      W(R) = -4/3 pi R^3 (P_Qs - P_H) + 4 pi R^2 sigma + W_Coulomb(R)
 
     Returns float or None.
     """
     if quark_phase == 'cfl':
-        result = solve_coulomb_cfl_at_R(
+        result = solve_saddlepoint_minimizecoulomb_cfl_at_R(
             R, H, params, Delta0, sigma,
             include_photons, include_gluons,
             include_thermal_neutrinos, initial_guess)
     else:
-        result = solve_coulomb_at_R(
+        result = solve_saddlepoint_minimizecoulomb_at_R(
             R, H, params, sigma,
             include_photons, include_gluons,
             include_thermal_neutrinos, initial_guess)
@@ -551,14 +579,14 @@ def work_of_formation_coulomb_at_R(R, H, params, sigma,
 # =============================================================================
 # Solver dispatch
 # =============================================================================
-def build_solver_fn(flavor_mode, electric_charge_mode, params,
+def get_solver_Qs(flavor_mode, electric_charge_mode, params,
                     quark_phase='unpaired', Delta0=None, sigma=None,
                     include_photons=True, include_gluons=True,
                     include_thermal_neutrinos=True):
-    """Build a solver callable from string-based mode arguments.
+    """Return a solver callable with signature solver_fn(H, initial_guess=None).
 
     Maps (flavor_mode, electric_charge_mode, quark_phase) to the appropriate
-    solver function, binding all required parameters via functools.partial.
+    solver function, binding all required parameters.
 
     Parameters
     ----------
@@ -584,8 +612,6 @@ def build_solver_fn(flavor_mode, electric_charge_mode, params,
     include_coulomb : bool
         Whether the solver produces Coulomb output (R_c).
     """
-    from functools import partial
-
     valid_flavor = ('frozen', 'saddlepoint')
     valid_charge = ('lcn', 'gcn', 'gcn_coulomb', 'coulomb_minimize')
     if flavor_mode not in valid_flavor:
@@ -616,27 +642,32 @@ def build_solver_fn(flavor_mode, electric_charge_mode, params,
         include_thermal_neutrinos=include_thermal_neutrinos,
     )
 
+    # --- frozen ---
     if flavor_mode == 'frozen':
-        solver_fn = partial(solve_frozen, params=params,
-                            charge_neutrality=charge_neutrality, **common_kw)
+        def solver_fn(H, initial_guess=None):
+            return solve_frozen(H, params, charge_neutrality, **common_kw,
+                                initial_guess=initial_guess)
         return solver_fn, False
 
-    # saddlepoint modes (lcn, gcn, gcn_coulomb)
+    # --- saddlepoint (lcn, gcn, gcn_coulomb) ---
     if electric_charge_mode in ('lcn', 'gcn', 'gcn_coulomb'):
         if quark_phase == 'cfl':
-            solver_fn = partial(solve_saddlepoint_cfl, params=params,
-                                Delta0=Delta0,
-                                charge_neutrality=charge_neutrality, **common_kw)
+            def solver_fn(H, initial_guess=None):
+                return solve_saddlepoint_cfl(H, params, Delta0, charge_neutrality,
+                                             **common_kw, initial_guess=initial_guess)
         else:
-            solver_fn = partial(solve_saddlepoint, params=params,
-                                charge_neutrality=charge_neutrality, **common_kw)
+            def solver_fn(H, initial_guess=None):
+                return solve_saddlepoint(H, params, charge_neutrality, **common_kw,
+                                         initial_guess=initial_guess)
         return solver_fn, False
 
-    # coulomb_minimize
+    # --- coulomb_minimize ---
     if quark_phase == 'cfl':
-        solver_fn = partial(solve_coulomb_cfl, params=params, Delta0=Delta0,
-                            sigma=sigma, **common_kw)
+        def solver_fn(H, initial_guess=None):
+            return solve_saddlepoint_minimizecoulomb_cfl(H, params, Delta0, sigma,
+                                                         **common_kw, initial_guess=initial_guess)
     else:
-        solver_fn = partial(solve_coulomb, params=params,
-                            sigma=sigma, **common_kw)
+        def solver_fn(H, initial_guess=None):
+            return solve_saddlepoint_minimizecoulomb(H, params, sigma, **common_kw,
+                                                     initial_guess=initial_guess)
     return solver_fn, True
