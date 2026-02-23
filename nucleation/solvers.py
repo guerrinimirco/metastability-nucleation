@@ -28,9 +28,9 @@ from eos.alphabag.thermodynamics_quarks import (
     compute_cfl_thermo_from_mu,
 )
 from eos.general.thermodynamics_leptons import electron_thermo
-from nucleation.physics import (
+from nucleation.barrier import (
     coulomb_delta_mu_e, coulomb_delta_P, coulomb_W,
-    bulk_W, surface_W,
+    bulk_W, surface_W, driving_force
 )
 
 
@@ -273,7 +273,7 @@ def solve_saddlepoint_minimizecoulomb(H, params, sigma,
     result_gcn = solve_saddlepoint(H, params, charge_neutrality='global', include_photons=include_photons, include_gluons=include_gluons,
                      include_thermal_neutrinos=include_thermal_neutrinos)
 
-    if result_gcn is None or result_gcn.P_total <= H.P_total:
+    if result_gcn is None or driving_force(result_gcn, H)<= 0:
         return None
 
     # if R_c_gcn exist, then proceed with the computation of solve_saddlepoint_minimizecoulombs
@@ -419,7 +419,7 @@ def solve_saddlepoint_minimizecoulomb_cfl(H, params, Delta0, sigma,
                      include_photons=include_photons, include_gluons=include_gluons,
                      include_thermal_neutrinos=include_thermal_neutrinos)
 
-    if result_gcn is None or result_gcn.P_total <= H.P_total:
+    if result_gcn is None or driving_force(result_gcn, H) <= 0:
         return None
 
     def equations(x):
@@ -539,7 +539,7 @@ def solve_saddlepoint_minimizecoulomb_cfl_at_R(R, H, params, Delta0, sigma,
 
 
 # =============================================================================
-# Work of formation at given R (with Coulomb) ??????????????????????????????????????
+# ?????????????????????????????????????? Work of formation at given R (with Coulomb) ??????????????????????????????????????
 # =============================================================================
 def work_of_formation_coulomb_at_R(R, H, params, sigma,
                                    include_photons=True, include_gluons=True,
@@ -583,7 +583,7 @@ def get_solver_Qs(flavor_mode, electric_charge_mode, params,
                     quark_phase='unpaired', Delta0=None, sigma=None,
                     include_photons=True, include_gluons=True,
                     include_thermal_neutrinos=True):
-    """Return a solver callable with signature solver_fn(H, initial_guess=None).
+    """Return a solver callable with signature solver(H, initial_guess=None).
 
     Maps (flavor_mode, electric_charge_mode, quark_phase) to the appropriate
     solver function, binding all required parameters.
@@ -607,10 +607,7 @@ def get_solver_Qs(flavor_mode, electric_charge_mode, params,
 
     Returns
     -------
-    solver_fn : callable
-        Solver with signature solver_fn(H, initial_guess=None).
-    include_coulomb : bool
-        Whether the solver produces Coulomb output (R_c).
+    solver : callable
     """
     valid_flavor = ('frozen', 'saddlepoint')
     valid_charge = ('lcn', 'gcn', 'gcn_coulomb', 'coulomb_minimize')
@@ -644,30 +641,30 @@ def get_solver_Qs(flavor_mode, electric_charge_mode, params,
 
     # --- frozen ---
     if flavor_mode == 'frozen':
-        def solver_fn(H, initial_guess=None):
+        def solver(H, initial_guess=None):
             return solve_frozen(H, params, charge_neutrality, **common_kw,
                                 initial_guess=initial_guess)
-        return solver_fn, False
+        return solver
 
     # --- saddlepoint (lcn, gcn, gcn_coulomb) ---
     if electric_charge_mode in ('lcn', 'gcn', 'gcn_coulomb'):
         if quark_phase == 'cfl':
-            def solver_fn(H, initial_guess=None):
+            def solver(H, initial_guess=None):
                 return solve_saddlepoint_cfl(H, params, Delta0, charge_neutrality,
                                              **common_kw, initial_guess=initial_guess)
         else:
-            def solver_fn(H, initial_guess=None):
+            def solver(H, initial_guess=None):
                 return solve_saddlepoint(H, params, charge_neutrality, **common_kw,
                                          initial_guess=initial_guess)
-        return solver_fn, False
+        return solver
 
     # --- coulomb_minimize ---
     if quark_phase == 'cfl':
-        def solver_fn(H, initial_guess=None):
+        def solver(H, initial_guess=None):
             return solve_saddlepoint_minimizecoulomb_cfl(H, params, Delta0, sigma,
                                                          **common_kw, initial_guess=initial_guess)
     else:
-        def solver_fn(H, initial_guess=None):
+        def solver(H, initial_guess=None):
             return solve_saddlepoint_minimizecoulomb(H, params, sigma, **common_kw,
                                                      initial_guess=initial_guess)
-    return solver_fn, True
+    return solver

@@ -2,8 +2,7 @@
 Nucleation Observables
 ======================
 
-High-level functions that compute nucleation observables (R_c, W_c, Gamma, tau)
-for the hadron-to-quark phase transition.
+High-level functions that compute nucleation observables (R_c, W_c, Gamma, tau) for the hadron-to-quark phase transition.
 
 Two independent parameters control the Q* solver:
 
@@ -42,7 +41,7 @@ from dataclasses import dataclass
 from scipy.interpolate import interp1d
 from scipy.optimize import root_scalar
 
-from nucleation.physics import (
+from nucleation.barrier import (
     driving_force,
     critical_radius, critical_work,
     critical_radius_coulomb,
