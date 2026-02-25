@@ -107,8 +107,6 @@ class EnergyBarrierResult:
     Delta_f: float
     delta_n_C: float
     sigma: float
-    R_c: float
-    W_c: float
 
 
 @dataclass
@@ -141,9 +139,9 @@ class NucleationTemperatureResult:
 # =============================================================================
 def compute_nucleation_observables(
     hadronic_table,
+    sigma,
     params=None,
     Qstar_table=None,
-    sigma=30.0,
     V=4.18879e51,  # sphere with radius 100 m in fm^3
     quark_phase='unpaired',
     Delta0=None,
@@ -165,12 +163,12 @@ def compute_nucleation_observables(
     ----------
     hadronic_table : EOSTableData
         Hadronic phase conditions.
+    sigma : float
+        Surface tension (MeV/fm^2).
     params : AlphaBagParams or None
         Quark EOS parameters. Required if Qstar_table is None.
     Qstar_table : QstarTableData or None
         Pre-computed Q* table. If None, computed internally using params.
-    sigma : float
-        Surface tension (MeV/fm^2).
     V : float
         System volume (fm^3) for nucleation time.
     quark_phase : str
@@ -283,23 +281,23 @@ def compute_nucleation_observables(
     Delta_f_bulk = driving_force(Qs, H)
 
     # ---- Step 4: Critical radius and critical work ----
-    # R_c is always stored in the Q* table (computed by compute_Qstar_table)
     R_c = q_d['R_c'].copy()
 
     if electric_charge_mode in ('lcn', 'gcn'):
         delta_n_C = np.zeros(shape)
+        W_c = critical_work_noCoulomb(Delta_f_bulk, sigma)
+        #test: W_c = critical_work_noCoulomb(Delta_f_bulk, sigma) ?= work_of_formation(R_c, Delta_f_bulk, sigma, delta_n_C)
     else:
         delta_n_C = (Qs.Y_C - Qs.Y_e) * Qs.n_B
 
-    W_c = np.where(
-        converged & ~np.isnan(R_c),
-        work_of_formation(R_c, Delta_f_bulk, sigma, delta_n_C),
-        np.nan,
-    )
+        W_c = np.where(
+            converged & ~np.isnan(R_c),
+            work_of_formation(R_c, Delta_f_bulk, sigma, delta_n_C),
+            np.nan,
+        )
 
     # ---- Step 5: Nucleation rate and time ----
-    Gamma = nucleation_rate(W_c, R_c, sigma, H.T, H, Qs,
-                            xi_q, lambda_th, zeta_th)
+    Gamma = nucleation_rate(W_c, R_c, sigma, H.T, H, Qs, xi_q, lambda_th, zeta_th)
     tau = nucleation_time(Gamma, V)
 
     # ---- Step 6: Build result ----
@@ -326,10 +324,10 @@ def compute_energy_barrier(
     Q_interp,
     n_B_H,
     T,
+    sigma,
+    electric_charge_mode='gcn',
     Y_L_H=None,
     Y_C_H=None,
-    sigma=30.0,
-    electric_charge_mode='gcn',
     R_values=None,
     params=None,
     quark_phase='unpaired',
@@ -355,14 +353,14 @@ def compute_energy_barrier(
         Baryon number density (fm^-3).
     T : float
         Temperature (MeV).
-    Y_L_H : float or None
-        Lepton fraction. Required for 'trapped_neutrinos'.
-    Y_C_H : float or None
-        Charge fraction. Required for 'fixed_yc'.
     sigma : float
         Surface tension (MeV/fm^2).
     electric_charge_mode : str
         'lcn', 'gcn', 'gcn_coulomb', or 'coulomb_minimize'.
+    Y_L_H : float or None
+        Lepton fraction. Required for 'trapped_neutrinos'.
+    Y_C_H : float or None
+        Charge fraction. Required for 'fixed_yc'.
     R_values : array-like or None
         Radius array (fm). If None, auto-generated from 0 to 5*R_c.
     params : AlphaBagParams or None
@@ -379,131 +377,62 @@ def compute_energy_barrier(
     EnergyBarrierResult
     """
     # ---- Interpolate H and Q* at the physical point ----
-    H, Qs = _interpolate_at_point(
-        H_interp, Q_interp, n_B_H, T,
-        Y_L_H=Y_L_H, Y_C_H=Y_C_H)
+    eq_type = H_interp['eq_type']
+    if eq_type == 'beta_eq':
+        pt = (n_B_H, T)
+    elif eq_type == 'trapped_neutrinos':
+        pt = (n_B_H, Y_L_H, T)
+    elif eq_type == 'fixed_yc':
+        pt = (n_B_H, Y_C_H, T)
+    else:
+        raise ValueError(f"Unsupported eq_type: '{eq_type}'")
+
+    # initialize R_values if None
+    if R_values is None:
+        R_values = np.linspace(0, 10.0, 500)
+    R_values = np.asarray(R_values, dtype=float)
+
+    # Evaluate H interpolators at the point
+    H = SimpleNamespace(
+        n_B=n_B_H, T=T,
+        P_total=float(H_interp['P'](*pt)),
+        e_total=float(H_interp['eps'](*pt)),
+        mu_B=float(H_interp['mu_B'](*pt)),
+        mu_C=float(H_interp['mu_C'](*pt)),
+        mu_S=float(H_interp['mu_S'](*pt)),
+        mu_e=float(H_interp['mu_e'](*pt)),
+        mu_nu=float(H_interp['mu_nu'](*pt)) if 'mu_nu' in H_interp else 0.0,
+        Y_e=float(H_interp['Y_C'](*pt)),   # charge neutrality in H
+    )
+
+    # Evaluate Q* interpolators at the point
+    q_keys = ['n_B', 'P_total', 'e_total',
+              'mu_B', 'mu_C', 'mu_S', 'mu_e',
+              'Y_C', 'Y_S', 'Y_e', 'Y_u', 'Y_d', 'Y_s', 'R_c']
+    q_vals = {k: float(Q_interp[k](*pt)) for k in q_keys if k in Q_interp}
+    q_vals['T'] = T
+    q_vals['mu_nu'] = H.mu_nu
+    q_vals['Y_nu'] = 0.0   # neutrino fraction at single point (beta_eq/fixed_yc)
+    if eq_type == 'trapped_neutrinos' and 'Y_C' in q_vals:
+        q_vals['Y_nu'] = Y_L_H - q_vals['Y_C'] if Y_L_H is not None else 0.0
+    Qs = SimpleNamespace(**q_vals)
 
     # Driving force at this point (scalar)
     Delta_f = float(driving_force(Qs, H))
 
-    # ---- coulomb_minimize: solve Q* at each R ----
-    if electric_charge_mode == 'coulomb_minimize':
-        if params is None:
-            raise ValueError(
-                "params required for coulomb_minimize energy barrier")
-
-        # Early exit for unfavorable driving force
-        if Delta_f >= 0:
-            R_arr = np.linspace(0, 20.0, 500) if R_values is None else np.asarray(R_values, dtype=float)
-            return EnergyBarrierResult(
-                R=R_arr,
-                W=np.full_like(R_arr, np.nan),
-                W_bulk=np.full_like(R_arr, np.nan),
-                W_surface=surface_W(R_arr, sigma),
-                W_coulomb=np.full_like(R_arr, np.nan),
-                Delta_f=Delta_f,
-                delta_n_C=0.0,
-                sigma=sigma,
-                R_c=np.nan,
-                W_c=np.nan,
-            )
-
-        from nucleation.energy_barrier.small_droplet.solvers import (
-            solve_saddlepoint_minimizecoulomb_at_R,
-            solve_saddlepoint_minimizecoulomb_cfl_at_R,
-        )
-
-        R_c_val = float(Qs.R_c)
-
-        if R_values is None:
-            R_max = max(5.0 * R_c_val, 20.0) if np.isfinite(R_c_val) else 20.0
-            R_values = np.linspace(0, R_max, 500)
-        R_values = np.asarray(R_values, dtype=float)
-
-        W_bulk = np.full_like(R_values, np.nan)
-        W_surface = surface_W(R_values, sigma)
-        W_coul = np.full_like(R_values, np.nan)
-
-        guess = None
-        dnC_at_Rc = 0.0
-        for i, R in enumerate(R_values):
-            if R <= 0:
-                W_bulk[i] = 0.0
-                W_coul[i] = 0.0
-                continue
-
-            if quark_phase == 'cfl':
-                result = solve_saddlepoint_minimizecoulomb_cfl_at_R(
-                    R, H, params, Delta0, sigma,
-                    include_photons, include_gluons,
-                    include_thermal_neutrinos, initial_guess=guess)
-            else:
-                result = solve_saddlepoint_minimizecoulomb_at_R(
-                    R, H, params, sigma,
-                    include_photons, include_gluons,
-                    include_thermal_neutrinos, initial_guess=guess)
-
-            if result is not None:
-                dnC_R = (result.Y_C - result.Y_e) * result.n_B
-                W_bulk[i] = bulk_W(R, result.P_total - H.P_total)
-                W_coul[i] = float(coulomb_W(R, dnC_R))
-                guess = np.array([
-                    result.mu_u, result.mu_d, result.mu_s, result.mu_e])
-                if abs(R - R_c_val) < (R_values[1] - R_values[0]):
-                    dnC_at_Rc = dnC_R
-
-        W_total = W_bulk + W_surface + W_coul
-        W_c_val = float(np.nanmax(W_total)) if np.any(np.isfinite(W_total)) else np.nan
-
-        return EnergyBarrierResult(
-            R=R_values,
-            W=W_total,
-            W_bulk=W_bulk,
-            W_surface=W_surface,
-            W_coulomb=W_coul,
-            Delta_f=Delta_f,
-            delta_n_C=dnC_at_Rc,
-            sigma=sigma,
-            R_c=R_c_val,
-            W_c=W_c_val,
-        )
-
-    # ---- Analytical modes: lcn, gcn, gcn_coulomb ----
-    if electric_charge_mode in ('lcn', 'gcn'):
-        dnC = 0.0
-        R_c_val = float(critical_radius_noCoulomb(Delta_f, sigma))
-        W_c_val = float(critical_work_noCoulomb(Delta_f, sigma))
-    elif electric_charge_mode == 'gcn_coulomb':
-        dnC = float((Qs.Y_C - Qs.Y_e) * Qs.n_B)
-        R_c_val = float(critical_radius_coulomb(Delta_f, sigma, dnC))
-        W_c_val = float(work_of_formation(R_c_val, Delta_f, sigma, dnC))
-    else:
-        raise ValueError(f"Invalid electric_charge_mode: '{electric_charge_mode}'")
-
-    # Build R array
-    if R_values is None:
-        R_max = max(5.0 * R_c_val, 20.0) if np.isfinite(R_c_val) else 20.0
-        R_values = np.linspace(0, R_max, 500)
-    R_values = np.asarray(R_values, dtype=float)
-
-    # Compute W(R) and its components
-    W_bulk = bulk_W(R_values, Delta_f)
-    W_surface = surface_W(R_values, sigma)
-    W_coul = coulomb_W(R_values, dnC)
-    W_total = W_bulk + W_surface + W_coul
+    delta_n_C = (Qs.Y_C - Qs.Y_e) * Qs.n_B
 
     return EnergyBarrierResult(
         R=R_values,
-        W=W_total,
-        W_bulk=W_bulk,
-        W_surface=W_surface,
-        W_coulomb=W_coul,
+        W=work_of_formation(R_values, Delta_f, sigma, delta_n_C),
+        W_bulk=bulk_W(R_values, Delta_f),
+        W_surface=surface_W(R_values, sigma),
+        W_coulomb=coulomb_W(R, delta_n_C),
         Delta_f=Delta_f,
-        delta_n_C=dnC,
+        delta_n_C=delta_n_C,
         sigma=sigma,
-        R_c=R_c_val,
-        W_c=W_c_val,
     )
+
 
 
 # =============================================================================
