@@ -48,33 +48,26 @@ class QstarTableData:
     """Q* nucleation table.
 
     Maps hadronic conditions (n_B_H, T, ...) to Q* quark droplet thermodynamics.
-    Optionally includes Coulomb field R_c.
+    Always includes R_c (critical radius); NaN where not computed.
     """
     eq_type: str            # 'beta_eq', 'trapped_neutrinos', 'fixed_yc'
     hadronic_grids: dict    # {n_B_H: array, T: array, ...}
-    data: dict              # {n_B, mu_u, ..., P_total, converged, ...}
+    data: dict              # {n_B, mu_u, ..., P_total, R_c, converged, ...}
     filepath: str = ""
-
-    @property
-    def has_coulomb(self):
-        return 'R_c' in self.data
 
     def __repr__(self):
         shapes = [f"{k}={len(v)}" for k, v in self.hadronic_grids.items()]
-        tag = " +Coulomb" if self.has_coulomb else ""
-        return f"QstarTableData(eq_type='{self.eq_type}', grids=({', '.join(shapes)}){tag})"
+        return f"QstarTableData(eq_type='{self.eq_type}', grids=({', '.join(shapes)})"
 
 
 # =============================================================================
 # Data initialization and storage
 # =============================================================================
-def _init_data(shape, include_coulomb=False):
+def _init_data(shape):
     """Initialize NaN-filled output arrays for Q* table computation."""
     data = {k: np.full(shape, np.nan) for k in _BASE_DATA_KEYS}
     data['converged'] = np.zeros(shape, dtype=bool)
-    if include_coulomb:
-        for k in _COULOMB_EXTRA_KEYS:
-            data[k] = np.full(shape, np.nan)
+    data['R_c'] = np.full(shape, np.nan)
     return data
 
 
@@ -106,6 +99,44 @@ def _store_result(data, idx, result, current_guess):
         + guess_extra
     )
     return current_guess
+
+
+def _compute_and_store_Rc(data, idx, result, H, electric_charge_mode, sigma):
+    """Compute R_c from solver result and store in data arrays.
+
+    Used for non-coulomb_minimize modes where R_c is not part of
+    the solver unknowns but can be derived analytically.
+    """
+    from nucleation.energy_barrier.small_droplet.barrier import (
+        driving_force,
+        critical_radius_noCoulomb,
+        critical_radius_coulomb,
+    )
+
+    # Build minimal Qs namespace for driving_force
+    Qs_point = SimpleNamespace(
+        P_total=result.P_total,
+        n_B=result.n_B,
+        mu_B=result.mu_B,
+        mu_C=result.mu_C,
+        mu_S=result.mu_S,
+        mu_e=result.mu_e,
+        mu_nu=H.mu_nu,
+        Y_C=result.Y_C,
+        Y_S=result.Y_S,
+        Y_e=getattr(result, 'Y_e', result.Y_C),
+        Y_nu=H.Y_nu,
+    )
+    Delta_f = driving_force(Qs_point, H)
+
+    if Delta_f >= 0:
+        return  # H not metastable, R_c stays NaN
+
+    if electric_charge_mode in ('lcn', 'gcn'):
+        data['R_c'][idx] = float(critical_radius_noCoulomb(Delta_f, sigma))
+    elif electric_charge_mode == 'gcn_coulomb':
+        delta_n_C = (result.Y_C - getattr(result, 'Y_e', result.Y_C)) * result.n_B
+        data['R_c'][idx] = float(critical_radius_coulomb(Delta_f, sigma, delta_n_C))
 
 
 # =============================================================================
@@ -160,7 +191,7 @@ def _build_H_at_point(hadronic_table, eq_type, idx, grid_values):
 # =============================================================================
 # Generic grid computation
 # =============================================================================
-def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
+def compute_Qstar_table(hadronic_table, solver_fn=None,
                         initial_guess=None, verbose=False,
                         save_table=False, output_file=None,
                         export_params=None, export_charge_neutrality=None,
@@ -197,8 +228,6 @@ def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
         Signature: solver_fn(H, initial_guess=...) -> result or None.
         Result is an EOS result object or (result, R_c) tuple for Coulomb.
         Mutually exclusive with flavor_mode/electric_charge_mode.
-    include_coulomb : bool
-        If True, data dict includes R_c. Auto-set when using string dispatch.
     initial_guess : array-like or None
     verbose : bool
     save_table : bool
@@ -222,7 +251,7 @@ def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
     Delta0 : float or None
         CFL pairing gap (MeV). Required if quark_phase='cfl'.
     sigma : float or None
-        Surface tension (MeV/fm^2). Required for 'coulomb_minimize'.
+        Surface tension (MeV/fm^2). Required for string dispatch (used to compute R_c).
     include_photons, include_gluons, include_thermal_neutrinos : bool
         Default True.
 
@@ -231,6 +260,8 @@ def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
     QstarTableData
     """
     # ---- Resolve solver_fn ----
+    include_coulomb = False  # default for callable interface
+
     if solver_fn is not None and flavor_mode is not None:
         raise ValueError(
             "Cannot specify both 'solver_fn' and 'flavor_mode'. "
@@ -247,9 +278,12 @@ def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
         if params is None:
             raise TypeError(
                 "'params' is required for string-based dispatch.")
+        if sigma is None:
+            raise TypeError(
+                "'sigma' is required for string-based dispatch (needed to compute R_c).")
 
-        from nucleation.solvers import build_solver_fn
-        solver_fn, include_coulomb = build_solver_fn(
+        from nucleation.energy_barrier.small_droplet.solvers import get_solver_Qs
+        solver_fn = get_solver_Qs(
             flavor_mode=flavor_mode,
             electric_charge_mode=electric_charge_mode,
             params=params,
@@ -260,6 +294,7 @@ def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
             include_gluons=include_gluons,
             include_thermal_neutrinos=include_thermal_neutrinos,
         )
+        include_coulomb = (electric_charge_mode == 'coulomb_minimize')
 
         # Auto-fill export metadata when using string dispatch
         if save_table:
@@ -268,7 +303,7 @@ def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
             if export_charge_neutrality is None:
                 export_charge_neutrality = (
                     'local' if electric_charge_mode == 'lcn' else 'global')
-            if export_sigma is None and electric_charge_mode == 'coulomb_minimize':
+            if export_sigma is None:
                 export_sigma = sigma
 
     eq_type = hadronic_table.eq_type
@@ -295,7 +330,7 @@ def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
     else:
         raise ValueError(f"Unsupported eq_type: '{eq_type}'")
 
-    data = _init_data(shape, include_coulomb=include_coulomb)
+    data = _init_data(shape)
     row_start_guess = initial_guess
 
     # Iterate: outer axes (Y_L or Y_C if present) -> T -> n_B
@@ -330,6 +365,12 @@ def compute_Qstar_table(hadronic_table, solver_fn=None, include_coulomb=False,
 
                 current_guess = _store_result(data, idx, result, current_guess)
                 if result is not None:
+                    # Compute R_c for non-coulomb modes (coulomb_minimize
+                    # already stores R_c via the (result, R_c) tuple)
+                    if not include_coulomb and sigma is not None:
+                        _compute_and_store_Rc(
+                            data, idx, result,
+                            H, electric_charge_mode, sigma)
                     row_converged += 1
                     if i_nB == 0:
                         row_start_guess = current_guess
@@ -504,9 +545,8 @@ def export_table(table, params, output_file,
     input_cols = [m.ravel(order='F') for m in mesh]
 
     # Determine data keys from what's actually in the table
-    data_keys = [k for k in _BASE_DATA_KEYS if k in table.data]
-    if table.has_coulomb:
-        data_keys += [k for k in _COULOMB_EXTRA_KEYS if k in table.data]
+    data_keys = [k for k in _BASE_DATA_KEYS + _COULOMB_EXTRA_KEYS
+                 if k in table.data]
     data_keys.append('converged')
 
     output_names = [k + '_Qs' for k in data_keys]

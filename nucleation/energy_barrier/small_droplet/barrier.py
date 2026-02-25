@@ -167,6 +167,28 @@ def coulomb_W(R, delta_n_C):
     """
     return (16.0 / 15.0) * np.pi**2 * hc * alpha_EM * delta_n_C**2 * R**5
 
+
+def coulomb_delta_W(R, delta_n_C):
+    """
+    This is the correction to the work of formation due to the Coulomb interaction in the minimize_coulomb case. 
+    See "Note on the relation between coulomb_delta_P and coulomb_P" for details.
+
+    W_Coulomb = -(16/15) pi^2 hbar*c alpha_em delta_n_C^2 R^5
+
+    Parameters
+    ----------
+    R : float or array
+        Droplet radius (fm).
+    delta_n_C : float or array
+        Net charge density (fm^-3).
+
+    Returns
+    -------
+    float or array
+        Coulomb contribution to W (MeV).
+    """
+    return -(16.0 / 15.0) * np.pi**2 * hc * alpha_EM * delta_n_C**2 * R**5
+
 # =============================================================================
 # Work of formation at arbitrary radius
 # =============================================================================
