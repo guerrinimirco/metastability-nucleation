@@ -1,15 +1,19 @@
 """Small-droplet (CNT) energy barrier model."""
 
 from nucleation.energy_barrier.small_droplet.observables import (
-    compute_nucleation_observables,
     compute_energy_barrier,
     compute_nucleation_temperature,
-    compute_quantum_nucleation,
-    build_nucleation_interpolators,
-    NucleationObservables,
     EnergyBarrierResult,
     NucleationTemperatureResult,
-    QuantumNucleationGrid,
+)
+from nucleation.energy_barrier.small_droplet.thermal import (
+    ThermalNucleationObservables,
+    compute_thermal_nucleation_observables,
+    build_thermal_nucleation_interpolators,
+)
+from nucleation.energy_barrier.small_droplet.quantum import (
+    QuantumNucleationObservables,
+    compute_quantum_nucleation_observables,
 )
 from nucleation.energy_barrier.small_droplet.table import (
     QstarTableData,
