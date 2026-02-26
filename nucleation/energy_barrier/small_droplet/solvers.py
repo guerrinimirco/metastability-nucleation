@@ -29,8 +29,7 @@ from eos.alphabag.thermodynamics_quarks import (
 )
 from eos.general.thermodynamics_leptons import electron_thermo
 from nucleation.energy_barrier.small_droplet.barrier import (
-    coulomb_delta_mu_e, coulomb_delta_P, coulomb_W,
-    bulk_W, surface_W, driving_force,
+    coulomb_delta_mu_e, coulomb_delta_P, driving_force,
 )
 
 

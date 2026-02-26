@@ -174,7 +174,7 @@ class NucleationTemperatureResult:
 # =============================================================================
 # Energy barrier W(R) at a single physical point
 # =============================================================================
-def _build_H_at_point(H_interp, pt, eq_type):
+def _build_H_from_interp(H_interp, pt, eq_type):
     """Evaluate hadronic interpolators at a single point.
 
     Returns a SimpleNamespace with P_total, mu_B, mu_C, mu_S, mu_e,
@@ -312,7 +312,7 @@ def compute_energy_barrier(
         raise ValueError(f"Unsupported eq_type: '{eq_type}'")
 
     # ---- Evaluate H at the point ----
-    H = _build_H_at_point(H_interp, pt, eq_type)
+    H = _build_H_from_interp(H_interp, pt, eq_type)
 
     # ---- R array ----
     if R_values is None:

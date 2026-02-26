@@ -142,7 +142,7 @@ def _compute_and_store_Rc(data, idx, result, H, electric_charge_mode, sigma):
 # =============================================================================
 # Build hadronic state at a single grid point
 # =============================================================================
-def _build_H_at_point(hadronic_table, eq_type, idx, grid_values):
+def _build_H_from_table(hadronic_table, eq_type, idx, grid_values):
     """Build hadronic SimpleNamespace at a single grid point.
 
     Parameters
@@ -302,7 +302,7 @@ def compute_Qstar_table(hadronic_table,
                     idx = (i_nB, i_outer, i_T)
                     gv = {'T': T_arr[i_T], 'Y_C': outer_arr[i_outer]}
 
-                H = _build_H_at_point(hadronic_table, eq_type, idx, gv)
+                H = _build_H_from_table(hadronic_table, eq_type, idx, gv)
 
                 result = solver_fn(H, initial_guess=current_guess)
 

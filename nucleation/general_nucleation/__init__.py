@@ -12,3 +12,16 @@ from nucleation.general_nucleation.quantum import (
     effective_inertia,
     quantum_nucleation_time,
 )
+
+__all__ = [
+    # thermal
+    "shear_viscosity",
+    "statistical_prefactor",
+    "dynamical_prefactor",
+    "nucleation_rate",
+    "nucleation_time",
+    # quantum
+    "QuantumNucleationResult",
+    "effective_inertia",
+    "quantum_nucleation_time",
+]

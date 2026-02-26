@@ -27,7 +27,7 @@ Functions
 import numpy as np
 from dataclasses import dataclass
 from scipy.integrate import quad
-from scipy.optimize import minimize_scalar, brentq, root_scalar
+from scipy.optimize import minimize_scalar, brentq
 
 from eos.general.physics_constants import hc
 
