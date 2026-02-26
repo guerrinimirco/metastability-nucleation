@@ -78,6 +78,7 @@ Nucleation temperature (general — works with any log10_tau interpolator)::
     >>> print(T_result.T_nuc)
 """
 
+import os
 import numpy as np
 from types import SimpleNamespace
 from dataclasses import dataclass
@@ -656,6 +657,8 @@ def compute_thermal_nucleation_observables(
     zeta_th=0.0,
     initial_guess=None,
     verbose=False,
+    save_table=False,
+    output_file=None,
 ):
     """
     Compute thermal nucleation observables for the hadron-to-quark phase transition.
@@ -689,6 +692,10 @@ def compute_thermal_nucleation_observables(
         Bulk viscosity.
     initial_guess : array-like or None
     verbose : bool
+    save_table : bool
+        If True, export the result to a text file.
+    output_file : str or None
+        Output file path. Required if save_table is True.
 
     Returns
     -------
@@ -801,7 +808,7 @@ def compute_thermal_nucleation_observables(
     tau = nucleation_time(Gamma, V)
 
     # ---- Step 6: Build result ----
-    return ThermalNucleationObservables(
+    result = ThermalNucleationObservables(
         eq_type=hadronic_table.eq_type,
         hadronic_grids=Qstar_table.hadronic_grids,
         flavor_mode=flavor_mode,
@@ -814,6 +821,13 @@ def compute_thermal_nucleation_observables(
         tau=tau,
         Qstar_table=Qstar_table,
     )
+
+    if save_table:
+        if output_file is None:
+            output_file = f"thermal_nucleation_{hadronic_table.eq_type}.dat"
+        export_thermal_nucleation_table(result, output_file)
+
+    return result
 
 
 # =============================================================================
@@ -878,6 +892,107 @@ def build_thermal_nucleation_interpolators(nucleation_obs, method='linear'):
     result['log10_Gamma'] = (lambda f: lambda *a: float(f(a)))(interp_log_Gamma)
 
     return result
+
+
+# =============================================================================
+# Export / load thermal nucleation tables
+# =============================================================================
+_THERMAL_DATA_KEYS = ['R_c', 'W_c', 'Gamma', 'tau']
+
+
+def export_thermal_nucleation_table(obs, output_file):
+    """Export ThermalNucleationObservables to text file.
+
+    Parameters
+    ----------
+    obs : ThermalNucleationObservables
+    output_file : str
+    """
+    axes = GRID_AXES[obs.eq_type]
+    grid_arrays = [obs.hadronic_grids[ax] for ax in axes]
+    mesh = np.meshgrid(*grid_arrays, indexing='ij')
+    input_cols = [m.ravel(order='F') for m in mesh]
+
+    output_cols = [getattr(obs, k).ravel(order='F') for k in _THERMAL_DATA_KEYS]
+
+    all_names = list(axes) + _THERMAL_DATA_KEYS
+    all_cols = np.column_stack(input_cols + output_cols)
+
+    header_lines = ["# Thermal nucleation observables"]
+    header_lines.append(f"# eq_type: {obs.eq_type}")
+    header_lines.append(f"# flavor_mode: {obs.flavor_mode}")
+    header_lines.append(f"# electric_charge_mode: {obs.electric_charge_mode}")
+    header_lines.append(f"# sigma: {obs.sigma} MeV/fm^2")
+    header_lines.append(f"# V: {obs.V} fm^3")
+    col_header = "  ".join(f"{name:>16s}" for name in all_names)
+    header_lines.append(f"# {col_header}")
+    meta = "\n".join(header_lines) + "\n"
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+    with open(output_file, 'w') as f:
+        f.write(meta)
+    with open(output_file, 'ab') as f:
+        np.savetxt(f, all_cols, fmt='%16.8e')
+    print(f"  Saved thermal nucleation table ({all_cols.shape[0]} rows) -> {output_file}")
+
+
+def load_thermal_nucleation_table(filepath):
+    """Load ThermalNucleationObservables from text file.
+
+    Parameters
+    ----------
+    filepath : str
+
+    Returns
+    -------
+    ThermalNucleationObservables
+    """
+    # Parse header metadata
+    metadata = {}
+    with open(filepath, 'r') as f:
+        for line in f:
+            if not line.startswith('#'):
+                break
+            for key in ('eq_type', 'flavor_mode', 'electric_charge_mode',
+                        'sigma', 'V'):
+                tag = f"# {key}:"
+                if line.startswith(tag):
+                    val = line[len(tag):].strip()
+                    # Strip units
+                    for unit in ('MeV/fm^2', 'fm^3'):
+                        val = val.replace(unit, '').strip()
+                    metadata[key] = val
+
+    eq_type = metadata['eq_type']
+    axes = GRID_AXES[eq_type]
+    n_axes = len(axes)
+
+    raw = np.loadtxt(filepath)
+
+    # Reconstruct 1D grids from unique values
+    hadronic_grids = {}
+    for i, ax in enumerate(axes):
+        hadronic_grids[ax] = np.unique(raw[:, i])
+
+    shape = tuple(len(hadronic_grids[ax]) for ax in axes)
+
+    # Reshape data columns
+    data = {}
+    for j, key in enumerate(_THERMAL_DATA_KEYS):
+        data[key] = raw[:, n_axes + j].reshape(shape, order='F')
+
+    return ThermalNucleationObservables(
+        eq_type=eq_type,
+        hadronic_grids=hadronic_grids,
+        flavor_mode=metadata['flavor_mode'],
+        electric_charge_mode=metadata['electric_charge_mode'],
+        sigma=float(metadata['sigma']),
+        V=float(metadata['V']),
+        R_c=data['R_c'],
+        W_c=data['W_c'],
+        Gamma=data['Gamma'],
+        tau=data['tau'],
+    )
 
 
 ###############################################################################

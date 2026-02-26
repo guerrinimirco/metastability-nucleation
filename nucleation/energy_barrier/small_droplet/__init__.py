@@ -8,6 +8,8 @@ from nucleation.energy_barrier.small_droplet.observables import (
     ThermalNucleationObservables,
     compute_thermal_nucleation_observables,
     build_thermal_nucleation_interpolators,
+    export_thermal_nucleation_table,
+    load_thermal_nucleation_table,
     QuantumNucleationObservables,
     compute_quantum_nucleation_observables,
 )
@@ -30,6 +32,8 @@ __all__ = [
     "ThermalNucleationObservables",
     "compute_thermal_nucleation_observables",
     "build_thermal_nucleation_interpolators",
+    "export_thermal_nucleation_table",
+    "load_thermal_nucleation_table",
     "QuantumNucleationObservables",
     "compute_quantum_nucleation_observables",
     # table
