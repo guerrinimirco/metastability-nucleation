@@ -469,7 +469,7 @@ def load_Qstar_table(filepath):
     )
 
 
-def load_Qstar_table(table, params, output_file,
+def export_table(table, params, output_file,
                  charge_neutrality=None, sigma=None):
     """Export QstarTableData to text file.
 
