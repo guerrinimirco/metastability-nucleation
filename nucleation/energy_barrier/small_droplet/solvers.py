@@ -56,19 +56,19 @@ def robust_root(equations, guess, h_guess, atol=1e-8):
     Returns scipy OptimizeResult or None.
     """
     sol = root(equations, guess, method='hybr')
-    if sol.success or np.max(np.abs(sol.fun)) < atol:
+    if np.max(np.abs(sol.fun)) < atol:
         return sol
 
     sol = root(equations, guess, method='lm')
-    if sol.success or np.max(np.abs(sol.fun)) < atol:
+    if np.max(np.abs(sol.fun)) < atol:
         return sol
 
     if not np.allclose(guess[:len(h_guess)], h_guess):
         sol = root(equations, h_guess, method='hybr')
-        if sol.success or np.max(np.abs(sol.fun)) < atol:
+        if np.max(np.abs(sol.fun)) < atol:
             return sol
         sol = root(equations, h_guess, method='lm')
-        if sol.success or np.max(np.abs(sol.fun)) < atol:
+        if np.max(np.abs(sol.fun)) < atol:
             return sol
 
     return None

@@ -620,6 +620,8 @@ class ThermalNucleationObservables:
         Nucleation rate (fm^{-3} s^{-1}).
     tau : np.ndarray
         Nucleation time (s).
+    converged : np.ndarray
+        Boolean array: True where Q* converged and R_c, W_c are finite.
     Qstar_table : object
         Q* table used (for reference).
     """
@@ -633,6 +635,7 @@ class ThermalNucleationObservables:
     W_c: np.ndarray
     Gamma: np.ndarray
     tau: np.ndarray
+    converged: np.ndarray
     Qstar_table: object = None
 
 
@@ -808,6 +811,8 @@ def compute_thermal_nucleation_observables(
     tau = nucleation_time(Gamma, V)
 
     # ---- Step 6: Build result ----
+    nuc_converged = converged & np.isfinite(R_c) & np.isfinite(W_c) & (R_c > 0)
+
     result = ThermalNucleationObservables(
         eq_type=hadronic_table.eq_type,
         hadronic_grids=Qstar_table.hadronic_grids,
@@ -819,6 +824,7 @@ def compute_thermal_nucleation_observables(
         W_c=W_c,
         Gamma=Gamma,
         tau=tau,
+        converged=nuc_converged,
         Qstar_table=Qstar_table,
     )
 
@@ -897,7 +903,7 @@ def build_thermal_nucleation_interpolators(nucleation_obs, method='linear'):
 # =============================================================================
 # Export / load thermal nucleation tables
 # =============================================================================
-_THERMAL_DATA_KEYS = ['R_c', 'W_c', 'Gamma', 'tau']
+_THERMAL_DATA_KEYS = ['R_c', 'W_c', 'Gamma', 'tau', 'converged']
 
 
 def export_thermal_nucleation_table(obs, output_file):
@@ -992,6 +998,7 @@ def load_thermal_nucleation_table(filepath):
         W_c=data['W_c'],
         Gamma=data['Gamma'],
         tau=data['tau'],
+        converged=data['converged'].astype(bool),
     )
 
 
