@@ -272,7 +272,7 @@ def solve_saddlepoint_minimizecoulomb(H, params, sigma,
     result_gcn = solve_saddlepoint(H, params, charge_neutrality='global', include_photons=include_photons, include_gluons=include_gluons,
                      include_thermal_neutrinos=include_thermal_neutrinos)
 
-    if result_gcn is None or driving_force(result_gcn, H)<= 0:
+    if result_gcn is None or driving_force(result_gcn, H) >= 0:
         return None
 
     # if R_c_gcn exist, then proceed with the computation of solve_saddlepoint_minimizecoulombs
@@ -418,7 +418,7 @@ def solve_saddlepoint_minimizecoulomb_cfl(H, params, Delta0, sigma,
                      include_photons=include_photons, include_gluons=include_gluons,
                      include_thermal_neutrinos=include_thermal_neutrinos)
 
-    if result_gcn is None or driving_force(result_gcn, H) <= 0:
+    if result_gcn is None or driving_force(result_gcn, H) >= 0:
         return None
 
     def equations(x):
