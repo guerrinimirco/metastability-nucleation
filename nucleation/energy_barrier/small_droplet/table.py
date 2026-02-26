@@ -191,67 +191,47 @@ def _build_H_at_point(hadronic_table, eq_type, idx, grid_values):
 # =============================================================================
 # Generic grid computation
 # =============================================================================
-def compute_Qstar_table(hadronic_table, solver_fn=None,
+def compute_Qstar_table(hadronic_table,
+                        flavor_mode, electric_charge_mode,
+                        params, sigma,
+                        quark_phase='unpaired', Delta0=None,
                         initial_guess=None, verbose=False,
                         save_table=False, output_file=None,
-                        export_params=None, export_charge_neutrality=None,
-                        export_sigma=None,
-                        pre_filter_mask=None,
-                        # String-based dispatch (alternative to solver_fn)
-                        flavor_mode=None, electric_charge_mode=None,
-                        params=None, quark_phase='unpaired', Delta0=None,
-                        sigma=None,
                         include_photons=True, include_gluons=True,
                         include_thermal_neutrinos=True):
     """Compute Q* table over the hadronic grid for any eq_type.
 
-    Can be called in two ways:
-
-    1. **Callable interface** (full control)::
-
-        solver_fn = partial(solve_saddlepoint, params=params, ...)
-        table = compute_Qstar_table(hadronic_table, solver_fn)
-
-    2. **String-based dispatch** (convenient)::
+    Usage::
 
         table = compute_Qstar_table(
             hadronic_table,
             flavor_mode='saddlepoint',
             electric_charge_mode='gcn',
             params=my_params,
+            sigma=30.0,
         )
 
     Parameters
     ----------
     hadronic_table : EOSTableData
-    solver_fn : callable or None
-        Signature: solver_fn(H, initial_guess=...) -> result or None.
-        Result is an EOS result object or (result, R_c) tuple for Coulomb.
-        Mutually exclusive with flavor_mode/electric_charge_mode.
-    initial_guess : array-like or None
-    verbose : bool
-    save_table : bool
-    output_file : str or None
-    export_params : AlphaBagParams or None
-        Required if save_table=True. Auto-set from params in string dispatch.
-    export_charge_neutrality : str or None
-    export_sigma : float or None
-    pre_filter_mask : ndarray of bool or None
-        Optional boolean array matching grid shape. If provided, grid points
-        where pre_filter_mask[idx] is True will be skipped (solver not called).
-        Use this to avoid expensive solves in regions known to be unfavorable.
-    flavor_mode : str or None
-        'frozen' or 'saddlepoint'. Used with string-based dispatch.
-    electric_charge_mode : str or None
+    flavor_mode : str
+        'frozen' or 'saddlepoint'.
+    electric_charge_mode : str
         'lcn', 'gcn', 'gcn_coulomb', or 'coulomb_minimize'.
-    params : AlphaBagParams or None
-        Quark EOS parameters. Required for string dispatch.
+    params : AlphaBagParams
+        Quark EOS parameters.
+    sigma : float
+        Surface tension (MeV/fm^2). Used to compute R_c.
     quark_phase : str
         'unpaired' or 'cfl'. Default 'unpaired'.
     Delta0 : float or None
         CFL pairing gap (MeV). Required if quark_phase='cfl'.
-    sigma : float or None
-        Surface tension (MeV/fm^2). Required for string dispatch (used to compute R_c).
+    initial_guess : array-like or None
+    verbose : bool
+    save_table : bool
+        If True, export the table to a text file.
+    output_file : str or None
+        Output filepath. Defaults to 'Qstar_{eq_type}.dat'.
     include_photons, include_gluons, include_thermal_neutrinos : bool
         Default True.
 
@@ -259,52 +239,21 @@ def compute_Qstar_table(hadronic_table, solver_fn=None,
     -------
     QstarTableData
     """
-    # ---- Resolve solver_fn ----
-    include_coulomb = False  # default for callable interface
+    from nucleation.energy_barrier.small_droplet.solvers import get_solver_Qs
 
-    if solver_fn is not None and flavor_mode is not None:
-        raise ValueError(
-            "Cannot specify both 'solver_fn' and 'flavor_mode'. "
-            "Use either the callable interface or string-based dispatch.")
+    solver_fn = get_solver_Qs(
+        flavor_mode=flavor_mode,
+        electric_charge_mode=electric_charge_mode,
+        params=params,
+        quark_phase=quark_phase,
+        Delta0=Delta0,
+        sigma=sigma,
+        include_photons=include_photons,
+        include_gluons=include_gluons,
+        include_thermal_neutrinos=include_thermal_neutrinos,
+    )
+    include_coulomb = (electric_charge_mode == 'coulomb_minimize')
 
-    if solver_fn is None:
-        if flavor_mode is None:
-            raise TypeError(
-                "compute_Qstar_table() requires either 'solver_fn' (callable) "
-                "or 'flavor_mode' + 'electric_charge_mode' (string dispatch).")
-        if electric_charge_mode is None:
-            raise TypeError(
-                "'electric_charge_mode' is required for string-based dispatch.")
-        if params is None:
-            raise TypeError(
-                "'params' is required for string-based dispatch.")
-        if sigma is None:
-            raise TypeError(
-                "'sigma' is required for string-based dispatch (needed to compute R_c).")
-
-        from nucleation.energy_barrier.small_droplet.solvers import get_solver_Qs
-        solver_fn = get_solver_Qs(
-            flavor_mode=flavor_mode,
-            electric_charge_mode=electric_charge_mode,
-            params=params,
-            quark_phase=quark_phase,
-            Delta0=Delta0,
-            sigma=sigma,
-            include_photons=include_photons,
-            include_gluons=include_gluons,
-            include_thermal_neutrinos=include_thermal_neutrinos,
-        )
-        include_coulomb = (electric_charge_mode == 'coulomb_minimize')
-
-        # Auto-fill export metadata when using string dispatch
-        if save_table:
-            if export_params is None:
-                export_params = params
-            if export_charge_neutrality is None:
-                export_charge_neutrality = (
-                    'local' if electric_charge_mode == 'lcn' else 'global')
-            if export_sigma is None:
-                export_sigma = sigma
 
     eq_type = hadronic_table.eq_type
     grids = hadronic_table.grids
@@ -355,13 +304,7 @@ def compute_Qstar_table(hadronic_table, solver_fn=None,
 
                 H = _build_H_at_point(hadronic_table, eq_type, idx, gv)
 
-                # Check pre-filter condition
-                if pre_filter_mask is not None and pre_filter_mask[idx]:
-                    # Skip this point - pre-filter indicates unfavorable conditions
-                    # Data remains NaN, converged[idx] stays False
-                    result = None
-                else:
-                    result = solver_fn(H, initial_guess=current_guess)
+                result = solver_fn(H, initial_guess=current_guess)
 
                 current_guess = _store_result(data, idx, result, current_guess)
                 if result is not None:
@@ -390,13 +333,12 @@ def compute_Qstar_table(hadronic_table, solver_fn=None,
     table = QstarTableData(eq_type=eq_type, hadronic_grids=grid_out, data=data)
 
     if save_table:
-        if export_params is None:
-            raise ValueError("export_params required when save_table=True")
         if output_file is None:
             output_file = f"Qstar_{eq_type}.dat"
-        export_table(table, export_params, output_file,
-                     charge_neutrality=export_charge_neutrality,
-                     sigma=export_sigma)
+        charge_neutrality = 'local' if electric_charge_mode == 'lcn' else 'global'
+        export_table(table, params, output_file,
+                     charge_neutrality=charge_neutrality,
+                     sigma=sigma)
 
     return table
 
@@ -527,7 +469,7 @@ def load_Qstar_table(filepath):
     )
 
 
-def export_table(table, params, output_file,
+def load_Qstar_table(table, params, output_file,
                  charge_neutrality=None, sigma=None):
     """Export QstarTableData to text file.
 

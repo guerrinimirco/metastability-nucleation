@@ -110,7 +110,7 @@ def solve_frozen(H, params, charge_neutrality,
         saddle = ((Qs.mu_B - H.mu_B)
                   + Qs.Y_C * (Qs.mu_C - H.mu_C)
                   + Qs.Y_S * (Qs.mu_S - H.mu_S)
-                  + Y_e_Qs * (mu_e - H.mu_e)) # note: given other eqs. it reduces to Qs.mu_B - H.mu_B
+                  + Y_e_Qs * (mu_e - H.mu_e)) # note: given other eqs. it reduces to Qs.gibbs - H.gibbs (Qs.mu_B - H.mu_B if H in beta eq.)
 
         return [Qs.Y_C - H.Y_C,
                 Qs.Y_S - H.Y_S,
@@ -536,44 +536,6 @@ def solve_saddlepoint_minimizecoulomb_cfl_at_R(R, H, params, Delta0, sigma,
         include_thermal_neutrinos=include_thermal_neutrinos,
         mu_nu=H.mu_nu,
     )
-
-
-# =============================================================================
-# ?????????????????????????????????????? Work of formation at given R (with Coulomb) ??????????????????????????????????????
-# =============================================================================
-def work_of_formation_coulomb_at_R(R, H, params, sigma,
-                                   include_photons=True, include_gluons=True,
-                                   include_thermal_neutrinos=True,
-                                   quark_phase='unpaired', Delta0=None,
-                                   initial_guess=None):
-    """Compute work of formation W(R) with Coulomb corrections.
-
-    Solves the Coulomb-corrected equations at fixed R, then computes:
-      W(R) = -4/3 pi R^3 (P_Qs - P_H) + 4 pi R^2 sigma + W_Coulomb(R)
-
-    Returns float or None.
-    """
-    if quark_phase == 'cfl':
-        result = solve_saddlepoint_minimizecoulomb_cfl_at_R(
-            R, H, params, Delta0, sigma,
-            include_photons, include_gluons,
-            include_thermal_neutrinos, initial_guess)
-    else:
-        result = solve_saddlepoint_minimizecoulomb_at_R(
-            R, H, params, sigma,
-            include_photons, include_gluons,
-            include_thermal_neutrinos, initial_guess)
-
-    if result is None:
-        return None
-
-    delta_n_C = (result.Y_C - result.Y_e) * result.n_B
-
-    W = (bulk_W(R, result.P_total - H.P_total)
-         + surface_W(R, sigma)
-         + coulomb_W(R, delta_n_C))
-
-    return W
 
 
 # =============================================================================
