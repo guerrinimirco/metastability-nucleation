@@ -963,6 +963,7 @@ def build_thermal_nucleation_interpolators(nucleation_obs, method='linear'):
     # log10(tau) interpolator (often more useful than tau directly)
     with np.errstate(divide='ignore', invalid='ignore'):
         log_tau = np.log10(nucleation_obs.tau)
+    log_tau = np.clip(log_tau, -50, 100)
     interp_log = RegularGridInterpolator(
         grid_tuple, log_tau, method=method,
         bounds_error=False, fill_value=np.nan)
