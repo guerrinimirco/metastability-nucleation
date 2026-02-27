@@ -316,13 +316,17 @@ def solve_saddlepoint_minimizecoulomb(H, params, sigma,
     if sol is None:
         result_lcn = solve_saddlepoint(H, params, charge_neutrality='local', include_photons=include_photons, include_gluons=include_gluons,
                      include_thermal_neutrinos=include_thermal_neutrinos)
-        if result_lcn is not None and result_lcn.P_total > H.P_total:
+        if result_lcn is not None and driving_force(result_lcn, H) < 0:
             R_c_lcn = 2.0 * sigma / (result_lcn.P_total - H.P_total)
+            mu_d_lcn = result_lcn.mu_d
+            mu_u_lcn = result_lcn.mu_u
+            mu_s_lcn = result_lcn.mu_s
             R_mid = (R_c_gcn + R_c_lcn) / 2.0
+            guess_mid = np.array([(mu_u_gcn+mu_u_lcn)/2.0, (mu_d_gcn+mu_d_lcn)/2.0, (mu_s_gcn+mu_s_lcn)/2.0, (result_gcn.mu_e+result_lcn.mu_e)/2.0, R_mid])
         else:
             R_mid = (R_c_gcn + 200.0) / 2.0
+            guess_mid = np.array([mu_u_gcn, mu_d_gcn, mu_s_gcn, result_gcn.mu_e, R_mid])
 
-        guess_mid = np.array([mu_u_gcn, mu_d_gcn, mu_s_gcn, result_gcn.mu_e, R_mid])
         h_guess_mid = np.append(hadronic_guess(H), R_mid)
         sol = robust_root(equations, guess_mid, h_guess_mid)
 

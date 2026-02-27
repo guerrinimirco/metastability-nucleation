@@ -162,6 +162,8 @@ class NucleationTemperatureResult:
         Target nucleation time (s).
     converged : np.ndarray
         Boolean mask: True where root finding succeeded.
+    residual : np.ndarray
+        |log10(tau(T_nuc)) - log10(tau_target)|. NaN where not converged.
     eq_type : str
         Equilibrium type.
     """
@@ -169,6 +171,7 @@ class NucleationTemperatureResult:
     T_nuc: np.ndarray
     tau_target: float
     converged: np.ndarray
+    residual: np.ndarray
     eq_type: str
 
 
@@ -424,19 +427,22 @@ def _find_T_root(f, T_arr, prev_T):
     T_root : float
         Root temperature, or NaN if not found.
     converged : bool
+    residual : float
+        |f(T_root)|, i.e. |log10(tau(T_root)) - log10(tau_target)|.
+        NaN if not converged.
     """
     # Evaluate at grid points for bracketing
     vals = np.array([f(T) for T in T_arr])
     valid = np.isfinite(vals) & (T_arr > 0)
     if np.sum(valid) < 2:
-        return np.nan, False
+        return np.nan, False, np.nan
 
     T_valid = T_arr[valid]
     vals_valid = vals[valid]
 
     sign_changes = np.where(np.diff(np.sign(vals_valid)))[0]
     if len(sign_changes) == 0:
-        return np.nan, False
+        return np.nan, False, np.nan
 
     # Fast path: secant method with warm-start from previous solution
     if prev_T is not None:
@@ -447,7 +453,7 @@ def _find_T_root(f, T_arr, prev_T):
                 # Verify it is a downward crossing (tau dropping below target)
                 eps = (T_valid[-1] - T_valid[0]) * 1e-4
                 if f(sol.root - eps) > 0 and f(sol.root + eps) < 0:
-                    return sol.root, True
+                    return sol.root, True, abs(f(sol.root))
         except (ValueError, RuntimeError):
             pass
 
@@ -456,7 +462,7 @@ def _find_T_root(f, T_arr, prev_T):
     downward = [sc for sc in sign_changes
                 if vals_valid[sc] > 0 and vals_valid[sc + 1] < 0]
     if len(downward) == 0:
-        return np.nan, False
+        return np.nan, False, np.nan
 
     # Pick the first downward crossing (lowest T)
     j = downward[0]
@@ -466,11 +472,11 @@ def _find_T_root(f, T_arr, prev_T):
     try:
         sol = root_scalar(f, bracket=[T_lo, T_hi], method='brentq')
         if sol.converged:
-            return sol.root, True
+            return sol.root, True, abs(f(sol.root))
     except (ValueError, RuntimeError):
         pass
 
-    return np.nan, False
+    return np.nan, False, np.nan
 
 
 def compute_nucleation_temperature(
@@ -523,6 +529,7 @@ def compute_nucleation_temperature(
         # ---- 1D: beta_eq ----
         T_nuc = np.full(n_nB, np.nan)
         conv = np.zeros(n_nB, dtype=bool)
+        resid = np.full(n_nB, np.nan)
         prev_T = T_guess
 
         for i in range(n_nB):
@@ -531,13 +538,17 @@ def compute_nucleation_temperature(
             def f(T, _nB=nB):
                 return log10_tau_fn(_nB, T) - log_tau_target
 
-            T_root, ok = _find_T_root(f, T_arr, prev_T)
+            guess_T = prev_T
+            T_root, ok, res = _find_T_root(f, T_arr, prev_T)
             if ok:
                 T_nuc[i] = T_root
                 conv[i] = True
+                resid[i] = res
                 prev_T = T_root
                 if verbose:
-                    print(f"  n_B={n_B_arr[i]:.4f} -> T_nuc={T_root:.2f} MeV")
+                    guess_str = f"{guess_T:.2f}" if guess_T is not None else "None"
+                    print(f"  n_B={n_B_arr[i]:.4f} -> T_nuc={T_root:.2f} MeV"
+                          f"  (res={res:.2e}, T_guess={guess_str})")
 
         out_grids = {'n_B_H': n_B_arr}
 
@@ -549,6 +560,7 @@ def compute_nucleation_temperature(
 
         T_nuc = np.full((n_nB, n_outer), np.nan)
         conv = np.zeros((n_nB, n_outer), dtype=bool)
+        resid = np.full((n_nB, n_outer), np.nan)
 
         for k in range(n_outer):
             prev_T = T_guess
@@ -560,16 +572,20 @@ def compute_nucleation_temperature(
                 def f(T, _nB=nB, _ov=outer_val):
                     return log10_tau_fn(_nB, _ov, T) - log_tau_target
 
-                T_root, ok = _find_T_root(f, T_arr, prev_T)
+                guess_T = prev_T
+                T_root, ok, res = _find_T_root(f, T_arr, prev_T)
                 if ok:
                     T_nuc[i, k] = T_root
                     conv[i, k] = True
+                    resid[i, k] = res
                     prev_T = T_root
                     if verbose:
                         label = ax_name.replace('_H', '')
+                        guess_str = f"{guess_T:.2f}" if guess_T is not None else "None"
                         print(f"  n_B={n_B_arr[i]:.4f}, "
                               f"{label}={outer_val:.3f}"
-                              f" -> T_nuc={T_root:.2f} MeV")
+                              f" -> T_nuc={T_root:.2f} MeV"
+                              f"  (res={res:.2e}, T_guess={guess_str})")
 
         out_grids = {'n_B_H': n_B_arr, ax_name: ax_arr}
 
@@ -581,6 +597,7 @@ def compute_nucleation_temperature(
         T_nuc=T_nuc,
         tau_target=tau_target,
         converged=conv,
+        residual=resid,
         eq_type=eq_type,
     )
 
