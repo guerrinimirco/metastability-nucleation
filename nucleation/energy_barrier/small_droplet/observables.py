@@ -83,7 +83,7 @@ import numpy as np
 from types import SimpleNamespace
 from dataclasses import dataclass
 from scipy.optimize import root_scalar
-from scipy.interpolate import RegularGridInterpolator
+from scipy.interpolate import RegularGridInterpolator, interp1d
 
 from nucleation.energy_barrier.small_droplet.barrier import (
     driving_force,
@@ -441,12 +441,7 @@ def _find_T_root(f, T_arr, T_guesses=None):
     T_valid = T_arr[valid]
     vals_valid = vals[valid]
 
-    sign_changes = np.where(np.diff(np.sign(vals_valid)))[0]
-    if len(sign_changes) == 0:
-        return np.nan, False, np.nan
-
-    # Fast path: secant method with warm-start guesses
-    # Try each guess individually, then both together, before Brent fallback
+    # Fast path: secant method with warm-start guesses (before sign-change gate)
     if T_guesses is not None:
         eps = (T_valid[-1] - T_valid[0]) * 1e-4
 
@@ -475,6 +470,10 @@ def _find_T_root(f, T_arr, T_guesses=None):
 
     # Fallback: scan sign changes for downward crossings
     # (f goes from + to -, i.e. tau drops below tau_target)
+    sign_changes = np.where(np.diff(np.sign(vals_valid)))[0]
+    if len(sign_changes) == 0:
+        return np.nan, False, np.nan
+
     downward = [sc for sc in sign_changes
                 if vals_valid[sc] > 0 and vals_valid[sc + 1] < 0]
     if len(downward) == 0:
@@ -662,6 +661,75 @@ def compute_nucleation_temperature(
         residual=resid,
         eq_type=eq_type,
     )
+
+
+def build_nucleation_temperature_interpolator(result, kind='cubic'):
+    """Build a smooth T_nuc interpolator from converged points only.
+
+    Non-converged points (NaN gaps) are skipped; the interpolator
+    bridges them with a continuous curve through the valid data.
+
+    Parameters
+    ----------
+    result : NucleationTemperatureResult
+        Output of ``compute_nucleation_temperature``.
+    kind : str
+        Interpolation kind passed to ``interp1d`` ('linear', 'cubic', etc.).
+
+    Returns
+    -------
+    callable
+        ``f(n_B_H)`` for beta_eq, or ``f(n_B_H, Y_L_H)`` for
+        trapped_neutrinos / fixed_yc.
+        Returns T_nuc (MeV). NaN outside the converged n_B range.
+    """
+    n_B_arr = result.hadronic_grids['n_B_H']
+    eq_type = result.eq_type
+
+    if result.T_nuc.ndim == 1:
+        # ---- 1D: beta_eq ----
+        mask = result.converged
+        if np.sum(mask) < 2:
+            return lambda n_B: np.nan
+
+        f = interp1d(n_B_arr[mask], result.T_nuc[mask], kind=kind,
+                     bounds_error=False, fill_value=np.nan)
+        return lambda n_B: float(f(n_B))
+
+    else:
+        # ---- 2D: trapped_neutrinos / fixed_yc ----
+        # T_nuc shape: (n_nB, n_outer)
+        non_T_axes = [ax for ax in GRID_AXES[eq_type]
+                      if ax not in ('n_B_H', 'T')]
+        ax_name = non_T_axes[0]
+        ax_arr = result.hadronic_grids[ax_name]
+        n_outer = len(ax_arr)
+
+        # Build a 1D interpolant per outer-axis slice
+        slice_interps = []
+        for k in range(n_outer):
+            mask = result.converged[:, k]
+            if np.sum(mask) < 2:
+                slice_interps.append(None)
+            else:
+                slice_interps.append(
+                    interp1d(n_B_arr[mask], result.T_nuc[mask, k],
+                             kind=kind, bounds_error=False,
+                             fill_value=np.nan))
+
+        # Fill a dense (n_nB, n_outer) array from per-slice interpolants
+        T_filled = np.full_like(result.T_nuc, np.nan)
+        for k, fi in enumerate(slice_interps):
+            if fi is not None:
+                T_filled[:, k] = fi(n_B_arr)
+
+        # Build 2D interpolator on the filled grid
+        grid_tuple = (n_B_arr, ax_arr)
+        rgi = RegularGridInterpolator(
+            grid_tuple, T_filled, method='linear',
+            bounds_error=False, fill_value=np.nan)
+
+        return lambda n_B, outer: float(rgi((n_B, outer)))
 
 
 ###############################################################################
@@ -965,7 +1033,7 @@ def build_thermal_nucleation_interpolators(nucleation_obs, method='linear'):
         log_tau = np.log10(nucleation_obs.tau)
     log_tau = np.clip(log_tau, -50, 100)
     interp_log = RegularGridInterpolator(
-        grid_tuple, log_tau, method=method,
+        grid_tuple, log_tau, method='cubic',
         bounds_error=False, fill_value=np.nan)
     result['log10_tau'] = (lambda f: lambda *a: float(f(a)))(interp_log)
 

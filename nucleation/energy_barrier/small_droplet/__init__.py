@@ -3,6 +3,7 @@
 from nucleation.energy_barrier.small_droplet.observables import (
     compute_energy_barrier,
     compute_nucleation_temperature,
+    build_nucleation_temperature_interpolator,
     EnergyBarrierResult,
     NucleationTemperatureResult,
     ThermalNucleationObservables,
@@ -27,6 +28,7 @@ __all__ = [
     # observables
     "compute_energy_barrier",
     "compute_nucleation_temperature",
+    "build_nucleation_temperature_interpolator",
     "EnergyBarrierResult",
     "NucleationTemperatureResult",
     "ThermalNucleationObservables",
