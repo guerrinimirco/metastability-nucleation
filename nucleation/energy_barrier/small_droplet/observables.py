@@ -545,10 +545,14 @@ def compute_nucleation_temperature(
                 conv[i] = True
                 resid[i] = res
                 prev_T = T_root
-                if verbose:
-                    guess_str = f"{guess_T:.2f}" if guess_T is not None else "None"
+            if verbose:
+                guess_str = f"{guess_T:.2f}" if guess_T is not None else "None"
+                if ok:
                     print(f"  n_B={n_B_arr[i]:.4f} -> T_nuc={T_root:.2f} MeV"
                           f"  (res={res:.2e}, T_guess={guess_str})")
+                else:
+                    print(f"  n_B={n_B_arr[i]:.4f} -> FAIL"
+                          f"  (T_guess={guess_str})")
 
         out_grids = {'n_B_H': n_B_arr}
 
@@ -579,13 +583,19 @@ def compute_nucleation_temperature(
                     conv[i, k] = True
                     resid[i, k] = res
                     prev_T = T_root
-                    if verbose:
-                        label = ax_name.replace('_H', '')
-                        guess_str = f"{guess_T:.2f}" if guess_T is not None else "None"
+                if verbose:
+                    label = ax_name.replace('_H', '')
+                    guess_str = f"{guess_T:.2f}" if guess_T is not None else "None"
+                    if ok:
                         print(f"  n_B={n_B_arr[i]:.4f}, "
                               f"{label}={outer_val:.3f}"
                               f" -> T_nuc={T_root:.2f} MeV"
                               f"  (res={res:.2e}, T_guess={guess_str})")
+                    else:
+                        print(f"  n_B={n_B_arr[i]:.4f}, "
+                              f"{label}={outer_val:.3f}"
+                              f" -> FAIL"
+                              f"  (T_guess={guess_str})")
 
         out_grids = {'n_B_H': n_B_arr, ax_name: ax_arr}
 
