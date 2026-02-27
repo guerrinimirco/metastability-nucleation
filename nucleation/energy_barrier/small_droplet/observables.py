@@ -663,6 +663,160 @@ def compute_nucleation_temperature(
     )
 
 
+def compute_nucleation_density(nucleation_obs, tau_target=1.0, verbose=False):
+    """Find n_B_H(T) at which tau = tau_target, for each T in the table grid.
+
+    Root-finds along n_B at each fixed T grid point, using the raw
+    table values with 1D cubic interpolation along n_B for sub-grid
+    accuracy.  No multi-dimensional interpolator needed.
+
+    Parameters
+    ----------
+    nucleation_obs : ThermalNucleationObservables
+        Output of ``compute_thermal_nucleation_observables``.
+    tau_target : float
+        Target nucleation time (seconds).
+    verbose : bool
+
+    Returns
+    -------
+    SimpleNamespace
+        T_arr, n_B_nuc, converged, residual, tau_target, eq_type.
+        For 2D cases, also outer_name and outer_arr.
+    """
+    eq_type = nucleation_obs.eq_type
+    grids = nucleation_obs.hadronic_grids
+    axes = GRID_AXES[eq_type]
+
+    n_B_arr = grids['n_B_H']
+    T_arr = grids['T']
+    n_T = len(T_arr)
+
+    log_tau_target = np.log10(tau_target)
+
+    # Compute log10(tau) from the raw table, clip inf/nan
+    with np.errstate(divide='ignore', invalid='ignore'):
+        log_tau_full = np.log10(nucleation_obs.tau)
+    log_tau_full = np.clip(log_tau_full, -50, 100)
+    log_tau_full = np.where(np.isnan(log_tau_full), 100.0, log_tau_full)
+
+    non_T_axes = [ax for ax in axes if ax not in ('n_B_H', 'T')]
+
+    def _find_nB_root(nB_valid, f_vals):
+        """Find n_B where f crosses zero downward; refine with brentq."""
+        sign_changes = np.where(np.diff(np.sign(f_vals)))[0]
+        downward = [sc for sc in sign_changes
+                    if f_vals[sc] > 0 and f_vals[sc + 1] < 0]
+        if len(downward) == 0:
+            return np.nan, False, np.nan
+        idx = downward[0]
+        nB_lo = float(nB_valid[idx])
+        nB_hi = float(nB_valid[idx + 1])
+        kind = 'cubic' if len(nB_valid) >= 4 else 'linear'
+        f_interp = interp1d(nB_valid, f_vals, kind=kind)
+        try:
+            sol = root_scalar(f_interp, bracket=[nB_lo, nB_hi],
+                              method='brentq')
+            if sol.converged:
+                return sol.root, True, abs(f_interp(sol.root))
+        except (ValueError, RuntimeError):
+            pass
+        return np.nan, False, np.nan
+
+    if len(non_T_axes) == 0:
+        # ---- 1D: beta_eq ----
+        # log_tau_full shape: (n_nB, n_T)
+        n_B_nuc = np.full(n_T, np.nan)
+        conv = np.zeros(n_T, dtype=bool)
+        resid = np.full(n_T, np.nan)
+
+        for j in range(n_T):
+            T = float(T_arr[j])
+            log_tau_slice = log_tau_full[:, j]
+            conv_mask = nucleation_obs.converged[:, j]
+            valid = conv_mask & np.isfinite(log_tau_slice)
+            if np.sum(valid) < 2:
+                if verbose:
+                    print(f"  T={T:.2f} MeV -> SKIP (< 2 valid)")
+                continue
+
+            f_vals = log_tau_slice[valid] - log_tau_target
+            nB_valid = n_B_arr[valid]
+
+            nB_root, ok, res = _find_nB_root(nB_valid, f_vals)
+            if ok:
+                n_B_nuc[j] = nB_root
+                conv[j] = True
+                resid[j] = res
+            if verbose:
+                if ok:
+                    print(f"  T={T:.2f} MeV -> n_B_nuc={nB_root:.4f} fm^-3"
+                          f"  (res={res:.2e})")
+                else:
+                    print(f"  T={T:.2f} MeV -> no crossing")
+
+        return SimpleNamespace(
+            T_arr=T_arr,
+            n_B_nuc=n_B_nuc,
+            tau_target=tau_target,
+            converged=conv,
+            residual=resid,
+            eq_type=eq_type,
+        )
+
+    elif len(non_T_axes) == 1:
+        # ---- 2D: trapped_neutrinos / fixed_yc ----
+        ax_name = non_T_axes[0]
+        ax_arr = grids[ax_name]
+        n_outer = len(ax_arr)
+        # log_tau_full shape: (n_nB, n_outer, n_T)
+        n_B_nuc = np.full((n_T, n_outer), np.nan)
+        conv = np.zeros((n_T, n_outer), dtype=bool)
+        resid = np.full((n_T, n_outer), np.nan)
+
+        for j in range(n_T):
+            for m in range(n_outer):
+                log_tau_slice = log_tau_full[:, m, j]
+                conv_mask = nucleation_obs.converged[:, m, j]
+                valid = conv_mask & np.isfinite(log_tau_slice)
+                if np.sum(valid) < 2:
+                    continue
+
+                f_vals = log_tau_slice[valid] - log_tau_target
+                nB_valid = n_B_arr[valid]
+
+                nB_root, ok, res = _find_nB_root(nB_valid, f_vals)
+                if ok:
+                    n_B_nuc[j, m] = nB_root
+                    conv[j, m] = True
+                    resid[j, m] = res
+                if verbose:
+                    label = ax_name.replace('_H', '')
+                    if ok:
+                        print(f"  T={T_arr[j]:.2f} MeV, "
+                              f"{label}={ax_arr[m]:.3f}"
+                              f" -> n_B_nuc={nB_root:.4f} fm^-3"
+                              f"  (res={res:.2e})")
+                    else:
+                        print(f"  T={T_arr[j]:.2f} MeV, "
+                              f"{label}={ax_arr[m]:.3f}"
+                              f" -> no crossing")
+
+        return SimpleNamespace(
+            T_arr=T_arr,
+            outer_name=ax_name,
+            outer_arr=ax_arr,
+            n_B_nuc=n_B_nuc,
+            tau_target=tau_target,
+            converged=conv,
+            residual=resid,
+            eq_type=eq_type,
+        )
+
+    else:
+        raise ValueError(f"Unsupported eq_type: '{eq_type}'")
+
+
 def build_nucleation_temperature_interpolator(result, kind='cubic'):
     """Build a smooth T_nuc interpolator from converged points only.
 
