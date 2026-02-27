@@ -405,7 +405,7 @@ def compute_energy_barrier(
 # =============================================================================
 # Nucleation temperature: T at which tau = tau_target
 # =============================================================================
-def _find_T_root(f, T_arr, prev_T):
+def _find_T_root(f, T_arr, T_guesses=None):
     """Find temperature T where f(T) = 0 (downward zero crossing).
 
     Scans grid points for bracketing, then refines with Brent's method.
@@ -419,8 +419,9 @@ def _find_T_root(f, T_arr, prev_T):
         f < 0 at higher T).
     T_arr : array-like
         Temperature grid used for bracketing scan.
-    prev_T : float or None
-        Warm-start guess from the previous density point.
+    T_guesses : list of float, or None
+        Warm-start guesses tried in order with secant method.
+        Typically ``[T_extrapolated, T_previous]``.
 
     Returns
     -------
@@ -444,18 +445,33 @@ def _find_T_root(f, T_arr, prev_T):
     if len(sign_changes) == 0:
         return np.nan, False, np.nan
 
-    # Fast path: secant method with warm-start from previous solution
-    if prev_T is not None:
-        try:
-            sol = root_scalar(f, x0=prev_T, method='secant',
-                              x1=prev_T * 1.01)
-            if sol.converged and T_valid[0] <= sol.root <= T_valid[-1]:
-                # Verify it is a downward crossing (tau dropping below target)
-                eps = (T_valid[-1] - T_valid[0]) * 1e-4
-                if f(sol.root - eps) > 0 and f(sol.root + eps) < 0:
-                    return sol.root, True, abs(f(sol.root))
-        except (ValueError, RuntimeError):
-            pass
+    # Fast path: secant method with warm-start guesses
+    # Try each guess individually, then both together, before Brent fallback
+    if T_guesses is not None:
+        eps = (T_valid[-1] - T_valid[0]) * 1e-4
+
+        def _try_secant(x0, x1):
+            try:
+                sol = root_scalar(f, x0=x0, x1=x1, method='secant')
+                if sol.converged and T_valid[0] <= sol.root <= T_valid[-1]:
+                    if f(sol.root - eps) > 0 and f(sol.root + eps) < 0:
+                        return sol.root, True, abs(f(sol.root))
+            except (ValueError, RuntimeError):
+                pass
+            return None
+
+        # 1) Secant from T_extrapolated
+        # 2) Secant from T_previous
+        for guess in T_guesses:
+            result = _try_secant(guess, guess * 1.01)
+            if result is not None:
+                return result
+
+        # 3) Secant with x0=T_extrapolated, x1=T_previous
+        if len(T_guesses) >= 2:
+            result = _try_secant(T_guesses[0], T_guesses[1])
+            if result is not None:
+                return result
 
     # Fallback: scan sign changes for downward crossings
     # (f goes from + to -, i.e. tau drops below tau_target)
@@ -531,6 +547,9 @@ def compute_nucleation_temperature(
         conv = np.zeros(n_nB, dtype=bool)
         resid = np.full(n_nB, np.nan)
         prev_T = T_guess
+        prev_nB = None
+        prev_prev_T = None
+        prev_prev_nB = None
 
         for i in range(n_nB):
             nB = float(n_B_arr[i])
@@ -538,15 +557,30 @@ def compute_nucleation_temperature(
             def f(T, _nB=nB):
                 return log10_tau_fn(_nB, T) - log_tau_target
 
-            guess_T = prev_T
-            T_root, ok, res = _find_T_root(f, T_arr, prev_T)
+            # Build guess list: extrapolation first, then previous T
+            T_guesses = []
+            if (prev_prev_T is not None and prev_T is not None
+                    and prev_prev_nB is not None and prev_nB is not None):
+                dnB_prev = prev_nB - prev_prev_nB
+                if abs(dnB_prev) > 0:
+                    T_extrap = prev_T + (prev_T - prev_prev_T) * (nB - prev_nB) / dnB_prev
+                    if T_extrap > 0:
+                        T_guesses.append(T_extrap)
+            if prev_T is not None:
+                T_guesses.append(prev_T)
+
+            T_root, ok, res = _find_T_root(f, T_arr, T_guesses or None)
             if ok:
                 T_nuc[i] = T_root
                 conv[i] = True
                 resid[i] = res
+                prev_prev_T = prev_T
+                prev_prev_nB = prev_nB
                 prev_T = T_root
+                prev_nB = nB
             if verbose:
-                guess_str = f"{guess_T:.2f}" if guess_T is not None else "None"
+                guess_str = (f"{T_guesses[0]:.2f}" if T_guesses
+                             else "None")
                 if ok:
                     print(f"  n_B={n_B_arr[i]:.4f} -> T_nuc={T_root:.2f} MeV"
                           f"  (res={res:.2e}, T_guess={guess_str})")
@@ -568,6 +602,9 @@ def compute_nucleation_temperature(
 
         for k in range(n_outer):
             prev_T = T_guess
+            prev_nB = None
+            prev_prev_T = None
+            prev_prev_nB = None
             outer_val = float(ax_arr[k])
 
             for i in range(n_nB):
@@ -576,16 +613,31 @@ def compute_nucleation_temperature(
                 def f(T, _nB=nB, _ov=outer_val):
                     return log10_tau_fn(_nB, _ov, T) - log_tau_target
 
-                guess_T = prev_T
-                T_root, ok, res = _find_T_root(f, T_arr, prev_T)
+                # Build guess list: extrapolation first, then previous T
+                T_guesses = []
+                if (prev_prev_T is not None and prev_T is not None
+                        and prev_prev_nB is not None and prev_nB is not None):
+                    dnB_prev = prev_nB - prev_prev_nB
+                    if abs(dnB_prev) > 0:
+                        T_extrap = prev_T + (prev_T - prev_prev_T) * (nB - prev_nB) / dnB_prev
+                        if T_extrap > 0:
+                            T_guesses.append(T_extrap)
+                if prev_T is not None:
+                    T_guesses.append(prev_T)
+
+                T_root, ok, res = _find_T_root(f, T_arr, T_guesses or None)
                 if ok:
                     T_nuc[i, k] = T_root
                     conv[i, k] = True
                     resid[i, k] = res
+                    prev_prev_T = prev_T
+                    prev_prev_nB = prev_nB
                     prev_T = T_root
+                    prev_nB = nB
                 if verbose:
                     label = ax_name.replace('_H', '')
-                    guess_str = f"{guess_T:.2f}" if guess_T is not None else "None"
+                    guess_str = (f"{T_guesses[0]:.2f}" if T_guesses
+                                 else "None")
                     if ok:
                         print(f"  n_B={n_B_arr[i]:.4f}, "
                               f"{label}={outer_val:.3f}"
