@@ -354,6 +354,81 @@ def driving_force(Qs, H):
     return -Delta_P + Qs.n_B * chem_sum
 
 
+# =============================================================================
+# Switching functions for unpCFL (radius-dependent phase blending)
+# =============================================================================
+def switching_step(R, Rx):
+    """Step switching function for unpCFL phase blending.
+
+    S(R) = 0 for R < Rx  (unpaired)
+    S(R) = 1 for R >= Rx (CFL)
+
+    Parameters
+    ----------
+    R : float or array
+        Droplet radius (fm).
+    Rx : float
+        Crossover radius (fm).
+
+    Returns
+    -------
+    float or array
+        Switching function value in [0, 1].
+    """
+    return np.where(R >= Rx, 1.0, 0.0)
+
+
+def switching_tanh(R, Rx, delta):
+    """Smooth tanh switching function for unpCFL phase blending.
+
+    S(R) = 0.5 * (1 + tanh((R - Rx) / delta))
+
+    Goes from ~0 at R << Rx (unpaired) to ~1 at R >> Rx (CFL).
+
+    Parameters
+    ----------
+    R : float or array
+        Droplet radius (fm).
+    Rx : float
+        Crossover radius (fm).
+    delta : float
+        Transition width (fm).
+
+    Returns
+    -------
+    float or array
+        Switching function value in [0, 1].
+    """
+    return 0.5 * (1.0 + np.tanh((R - Rx) / delta))
+
+
+def get_switching_function(mode, Rx, delta=None):
+    """Return a switching callable S(R) for the given mode.
+
+    Parameters
+    ----------
+    mode : str
+        'step' or 'tanh'.
+    Rx : float
+        Crossover radius (fm).
+    delta : float or None
+        Transition width (fm). Required for 'tanh'.
+
+    Returns
+    -------
+    callable
+        S(R) -> float or array.
+    """
+    if mode == 'step':
+        return lambda R: switching_step(R, Rx)
+    elif mode == 'tanh':
+        if delta is None:
+            raise ValueError("delta required for tanh switching")
+        return lambda R: switching_tanh(R, Rx, delta)
+    else:
+        raise ValueError(f"Unknown switching mode: '{mode}'")
+
+
 """
 Note on the relation between coulomb_delta_P and coulomb_P
 ==========================================================

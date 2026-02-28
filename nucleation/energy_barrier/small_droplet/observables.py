@@ -82,7 +82,7 @@ import os
 import numpy as np
 from types import SimpleNamespace
 from dataclasses import dataclass
-from scipy.optimize import root_scalar
+from scipy.optimize import root_scalar, minimize
 from scipy.interpolate import RegularGridInterpolator, interp1d
 
 from nucleation.energy_barrier.small_droplet.barrier import (
@@ -91,6 +91,7 @@ from nucleation.energy_barrier.small_droplet.barrier import (
     work_of_formation,
     critical_work_noCoulomb,
     critical_radius_noCoulomb,
+    get_switching_function,
 )
 from nucleation.energy_barrier.small_droplet.solvers import (
     get_solver_Qs,
@@ -253,6 +254,11 @@ def compute_energy_barrier(
     include_photons=True,
     include_gluons=True,
     include_thermal_neutrinos=True,
+    switching_mode='step',
+    Rx=None,
+    switching_width=None,
+    Q_interp_unp=None,
+    Q_interp_cfl=None,
 ):
     """
     Compute W(R) at a single physical point.
@@ -289,9 +295,9 @@ def compute_energy_barrier(
     flavor_mode : str
         'frozen' or 'saddlepoint'. Used only in solver paths (A, C).
     quark_phase : str
-        'unpaired' or 'cfl'. Used only in solver paths.
+        'unpaired', 'cfl', or 'unpCFL'. Used only in solver paths.
     Delta0 : float or None
-        CFL pairing gap (MeV). Required if quark_phase='cfl'.
+        CFL pairing gap (MeV). Required if quark_phase='cfl' or 'unpCFL'.
     Y_L_H : float or None
         Lepton fraction. Required for 'trapped_neutrinos'.
     Y_C_H : float or None
@@ -299,6 +305,16 @@ def compute_energy_barrier(
     R_values : array-like or None
         Radius array (fm). If None, uses [0, 20] fm with 500 points.
     include_photons, include_gluons, include_thermal_neutrinos : bool
+    switching_mode : str
+        'step' or 'tanh'. Only used when quark_phase='unpCFL'.
+    Rx : float or None
+        Crossover radius (fm). Required when quark_phase='unpCFL'.
+    switching_width : float or None
+        Tanh transition width (fm). Required when switching_mode='tanh'.
+    Q_interp_unp : dict or None
+        Pre-built Q* interpolators for unpaired phase. For unpCFL.
+    Q_interp_cfl : dict or None
+        Pre-built Q* interpolators for CFL phase. For unpCFL.
 
     Returns
     -------
@@ -328,7 +344,114 @@ def compute_energy_barrier(
     Delta_f = np.full(n_R, np.nan)
     delta_n_C = np.full(n_R, np.nan)
 
-    if electric_charge_mode == 'coulomb_minimize':
+    if quark_phase == 'unpCFL':
+        # --- Path unpCFL: blend unpaired and CFL with switching function ---
+        if Rx is None:
+            raise ValueError("Rx required for quark_phase='unpCFL'")
+        if Delta0 is None:
+            raise ValueError("Delta0 required for quark_phase='unpCFL'")
+
+        S_func = get_switching_function(switching_mode, Rx, switching_width)
+        common_solver_kw = dict(
+            include_photons=include_photons,
+            include_gluons=include_gluons,
+            include_thermal_neutrinos=include_thermal_neutrinos,
+        )
+
+        if electric_charge_mode == 'coulomb_minimize':
+            # Solve both phases at each R
+            if params is None:
+                raise ValueError("params required for coulomb_minimize")
+            prev_guess_unp = None
+            prev_guess_cfl = None
+            for i, R in enumerate(R_values):
+                if R == 0:
+                    Delta_f[i] = 0.0
+                    delta_n_C[i] = 0.0
+                    continue
+
+                Qs_unp = solve_saddlepoint_minimizecoulomb_at_R(
+                    R, H, params, sigma, **common_solver_kw,
+                    initial_guess=prev_guess_unp)
+                Qs_cfl = solve_saddlepoint_minimizecoulomb_cfl_at_R(
+                    R, H, params, Delta0, sigma, **common_solver_kw,
+                    initial_guess=prev_guess_cfl)
+
+                S_val = float(S_func(R))
+
+                if Qs_unp is not None and Qs_cfl is not None:
+                    df_unp = float(driving_force(Qs_unp, H))
+                    df_cfl = float(driving_force(Qs_cfl, H))
+                    dnC_unp = float((Qs_unp.Y_C - Qs_unp.Y_e) * Qs_unp.n_B)
+                    dnC_cfl = float((Qs_cfl.Y_C - Qs_cfl.Y_e) * Qs_cfl.n_B)
+                    Delta_f[i] = (1 - S_val) * df_unp + S_val * df_cfl
+                    delta_n_C[i] = (1 - S_val) * dnC_unp + S_val * dnC_cfl
+                    prev_guess_unp = np.array([Qs_unp.mu_u, Qs_unp.mu_d,
+                                               Qs_unp.mu_s, Qs_unp.mu_e])
+                    prev_guess_cfl = np.array([Qs_cfl.mu_u, Qs_cfl.mu_d,
+                                               Qs_cfl.mu_s, Qs_cfl.mu_e])
+                elif Qs_unp is not None:
+                    Delta_f[i] = (1 - S_val) * float(driving_force(Qs_unp, H))
+                    delta_n_C[i] = (1 - S_val) * float(
+                        (Qs_unp.Y_C - Qs_unp.Y_e) * Qs_unp.n_B)
+                    prev_guess_unp = np.array([Qs_unp.mu_u, Qs_unp.mu_d,
+                                               Qs_unp.mu_s, Qs_unp.mu_e])
+                elif Qs_cfl is not None:
+                    Delta_f[i] = S_val * float(driving_force(Qs_cfl, H))
+                    delta_n_C[i] = S_val * float(
+                        (Qs_cfl.Y_C - Qs_cfl.Y_e) * Qs_cfl.n_B)
+                    prev_guess_cfl = np.array([Qs_cfl.mu_u, Qs_cfl.mu_d,
+                                               Qs_cfl.mu_s, Qs_cfl.mu_e])
+        else:
+            # Non-coulomb_minimize: solve each phase once, blend with S(R)
+            df_unp_val = np.nan
+            df_cfl_val = np.nan
+            dnC_unp_val = 0.0
+            dnC_cfl_val = 0.0
+
+            # Get unpaired Q*
+            if Q_interp_unp is not None:
+                Qs_unp = _Qs_from_interp(Q_interp_unp, pt, eq_type,
+                                          H.mu_nu, Y_L_H)
+                df_unp_val, dnC_unp_val = _Delta_f_and_dnC_from_Qs(
+                    Qs_unp, H, electric_charge_mode)
+            elif params is not None:
+                solver_unp = get_solver_Qs(
+                    flavor_mode, electric_charge_mode, params,
+                    quark_phase='unpaired', sigma=sigma, **common_solver_kw)
+                Qs_unp_result = solver_unp(H)
+                if Qs_unp_result is not None:
+                    df_unp_val, dnC_unp_val = _Delta_f_and_dnC_from_Qs(
+                        Qs_unp_result, H, electric_charge_mode)
+            else:
+                raise ValueError(
+                    "Either Q_interp_unp or params must be provided for unpCFL")
+
+            # Get CFL Q*
+            if Q_interp_cfl is not None:
+                Qs_cfl = _Qs_from_interp(Q_interp_cfl, pt, eq_type,
+                                          H.mu_nu, Y_L_H)
+                df_cfl_val, dnC_cfl_val = _Delta_f_and_dnC_from_Qs(
+                    Qs_cfl, H, electric_charge_mode)
+            elif params is not None:
+                solver_cfl = get_solver_Qs(
+                    flavor_mode, electric_charge_mode, params,
+                    quark_phase='cfl', Delta0=Delta0, sigma=sigma,
+                    **common_solver_kw)
+                Qs_cfl_result = solver_cfl(H)
+                if Qs_cfl_result is not None:
+                    df_cfl_val, dnC_cfl_val = _Delta_f_and_dnC_from_Qs(
+                        Qs_cfl_result, H, electric_charge_mode)
+            else:
+                raise ValueError(
+                    "Either Q_interp_cfl or params must be provided for unpCFL")
+
+            # Blend with switching function
+            S_arr = S_func(R_values)
+            Delta_f[:] = (1 - S_arr) * df_unp_val + S_arr * df_cfl_val
+            delta_n_C[:] = (1 - S_arr) * dnC_unp_val + S_arr * dnC_cfl_val
+
+    elif electric_charge_mode == 'coulomb_minimize':
         # --- Path A: R-dependent Q* via Coulomb solver ---
         if params is None:
             raise ValueError(
@@ -941,6 +1064,262 @@ class ThermalNucleationObservables:
 
 
 # =============================================================================
+# unpCFL: R_c and W_c finders (step vs tanh)
+# =============================================================================
+def _find_Rc_Wc_step(R_c_unp, R_c_cfl, Rx, S_func,
+                     Delta_f_unp, Delta_f_cfl,
+                     delta_n_C_unp, delta_n_C_cfl, sigma):
+    """Critical radius and barrier height for step switching.
+
+    R_c = R_c_unp              if R_c_unp <= Rx
+    R_c = max(Rx, R_c_cfl)    if R_c_unp >  Rx
+
+    W_c = work_of_formation(R_c, blended Delta_f, sigma, blended delta_n_C)
+    """
+    R_c = np.where(R_c_unp <= Rx, R_c_unp, np.maximum(Rx, R_c_cfl))
+    S_at_Rc = S_func(R_c)
+    Delta_f_at_Rc = (1 - S_at_Rc) * Delta_f_unp + S_at_Rc * Delta_f_cfl
+    delta_n_C_at_Rc = (1 - S_at_Rc) * delta_n_C_unp + S_at_Rc * delta_n_C_cfl
+    W_c = work_of_formation(R_c, Delta_f_at_Rc, sigma, delta_n_C_at_Rc)
+    return R_c, W_c
+
+
+def _find_Rc_Wc_tanh(R_c_unp, R_c_cfl, Rx, S_func,
+                     Delta_f_unp, Delta_f_cfl,
+                     delta_n_C_unp, delta_n_C_cfl, sigma,
+                     R_c_guess=None):
+    """Critical radius and barrier height for tanh switching.
+
+    Numerically maximises W(R) per grid point via minimize_scalar(-W),
+    using the step-formula R_c as initial guess (unless R_c_guess is given).
+    """
+    shape = Delta_f_unp.shape
+    if R_c_guess is None:
+        R_c_guess = np.where(R_c_unp <= Rx, R_c_unp, np.maximum(Rx, R_c_cfl))
+
+    R_c = np.full(shape, np.nan)
+    W_c = np.full(shape, np.nan)
+    flat_Df_unp = Delta_f_unp.ravel()
+    flat_Df_cfl = Delta_f_cfl.ravel()
+    flat_dnC_unp = delta_n_C_unp.ravel()
+    flat_dnC_cfl = delta_n_C_cfl.ravel()
+    flat_guess = R_c_guess.ravel()
+    flat_Rc = R_c.ravel()
+    flat_Wc = W_c.ravel()
+
+    for k in range(flat_Rc.size):
+        guess_k = flat_guess[k]
+        if not np.isfinite(guess_k) or guess_k <= 0:
+            continue
+        df_u, df_c = flat_Df_unp[k], flat_Df_cfl[k]
+        dnc_u, dnc_c = flat_dnC_unp[k], flat_dnC_cfl[k]
+
+        def _neg_W(R, _df_u=df_u, _df_c=df_c,
+                   _dnc_u=dnc_u, _dnc_c=dnc_c):
+            S = S_func(R)
+            Df = (1 - S) * _df_u + S * _df_c
+            dnC = (1 - S) * _dnc_u + S * _dnc_c
+            return -work_of_formation(R, Df, sigma, dnC)
+
+        sol = minimize(lambda R: _neg_W(R[0]), x0=[guess_k])
+        if sol.x[0] > 0:
+            flat_Rc[k] = sol.x[0]
+            flat_Wc[k] = -sol.fun
+
+    return flat_Rc.reshape(shape), flat_Wc.reshape(shape)
+
+
+# =============================================================================
+# unpCFL helper
+# =============================================================================
+def _compute_thermal_nucleation_unpCFL(
+    hadronic_table,
+    sigma,
+    params,
+    Delta0,
+    V,
+    flavor_mode,
+    electric_charge_mode,
+    switching_mode,
+    Rx,
+    switching_width,
+    Qstar_table_unp,
+    Qstar_table_cfl,
+    R_max,
+    n_R,
+    include_photons,
+    include_gluons,
+    include_thermal_neutrinos,
+    xi_q,
+    lambda_th,
+    zeta_th,
+    initial_guess,
+    verbose,
+    save_table,
+    output_file,
+):
+    """Compute thermal nucleation observables for the unpCFL quark phase.
+
+    Blends unpaired and CFL quark matter using a radius-dependent switching
+    function S(R): PQ(R) = (1-S(R))*PQ_unp + S(R)*PQ_cfl.
+
+    Called internally by ``compute_thermal_nucleation_observables`` when
+    ``quark_phase='unpCFL'``.
+    """
+    common_table_kw = dict(
+        include_photons=include_photons,
+        include_gluons=include_gluons,
+        include_thermal_neutrinos=include_thermal_neutrinos,
+        initial_guess=initial_guess,
+        verbose=verbose,
+    )
+
+    # ---- Step 1: Compute / accept both Q* tables ----
+    if Qstar_table_unp is None:
+        if params is None:
+            raise ValueError(
+                "params must be provided when Qstar_table_unp is None")
+        if verbose:
+            print("Computing unpaired Q* table...")
+        Qstar_table_unp = compute_Qstar_table(
+            hadronic_table,
+            flavor_mode=flavor_mode,
+            electric_charge_mode=electric_charge_mode,
+            params=params,
+            quark_phase='unpaired',
+            sigma=sigma,
+            **common_table_kw,
+        )
+
+    if Qstar_table_cfl is None:
+        if params is None:
+            raise ValueError(
+                "params must be provided when Qstar_table_cfl is None")
+        if verbose:
+            print("Computing CFL Q* table...")
+        Qstar_table_cfl = compute_Qstar_table(
+            hadronic_table,
+            flavor_mode=flavor_mode,
+            electric_charge_mode=electric_charge_mode,
+            params=params,
+            quark_phase='cfl',
+            Delta0=Delta0,
+            sigma=sigma,
+            **common_table_kw,
+        )
+
+    # ---- Step 2: Build phase data ----
+    h_d = hadronic_table.data
+    q_d_unp = Qstar_table_unp.data
+    q_d_cfl = Qstar_table_cfl.data
+    grids = hadronic_table.grids
+    eq_type = hadronic_table.eq_type
+    shape = q_d_unp['P_total'].shape
+
+    if eq_type == 'beta_eq':
+        n_B_H, T_H = np.meshgrid(grids['n_B'], grids['T'], indexing='ij')
+        mu_nu_H = np.zeros(shape)
+        Y_nu_H = np.zeros(shape)
+    elif eq_type == 'trapped_neutrinos':
+        n_B_H, Y_L_H, T_H = np.meshgrid(
+            grids['n_B'], grids['Y_L'], grids['T'], indexing='ij')
+        mu_nu_H = h_d['mu_nu']
+        Y_nu_H = Y_L_H - h_d['Y_C']
+    elif eq_type == 'fixed_yc':
+        n_B_H, _, T_H = np.meshgrid(
+            grids['n_B'], grids['Y_C'], grids['T'], indexing='ij')
+        mu_nu_H = np.zeros(shape)
+        Y_nu_H = np.zeros(shape)
+
+    H = SimpleNamespace(**{
+        **h_d,
+        'n_B': n_B_H, 'T': T_H,
+        'Y_e': h_d['Y_C'],
+        'mu_nu': mu_nu_H, 'Y_nu': Y_nu_H,
+    })
+
+    Qs_unp = SimpleNamespace(**{
+        **q_d_unp,
+        'T': T_H,
+        'mu_nu': mu_nu_H, 'Y_nu': Y_nu_H,
+    })
+    Qs_cfl = SimpleNamespace(**{
+        **q_d_cfl,
+        'T': T_H,
+        'mu_nu': mu_nu_H, 'Y_nu': Y_nu_H,
+    })
+
+    # ---- Step 3: Driving forces for both phases ----
+    Delta_f_unp = driving_force(Qs_unp, H)
+    Delta_f_cfl = driving_force(Qs_cfl, H)
+
+    if electric_charge_mode in ('lcn', 'gcn'):
+        delta_n_C_unp = np.zeros(shape)
+        delta_n_C_cfl = np.zeros(shape)
+    else:
+        delta_n_C_unp = (Qs_unp.Y_C - Qs_unp.Y_e) * Qs_unp.n_B
+        delta_n_C_cfl = (Qs_cfl.Y_C - Qs_cfl.Y_e) * Qs_cfl.n_B
+
+    # ---- Step 4: Critical radius and barrier height ----
+    S_func = get_switching_function(switching_mode, Rx, switching_width)
+    R_c_unp = q_d_unp['R_c']
+    R_c_cfl = q_d_cfl['R_c']
+    common_kw = dict(
+        R_c_unp=R_c_unp, R_c_cfl=R_c_cfl, Rx=Rx, S_func=S_func,
+        Delta_f_unp=Delta_f_unp, Delta_f_cfl=Delta_f_cfl,
+        delta_n_C_unp=delta_n_C_unp, delta_n_C_cfl=delta_n_C_cfl,
+        sigma=sigma,
+    )
+
+    if switching_mode == 'step':
+        R_c, W_c = _find_Rc_Wc_step(**common_kw)
+    elif switching_mode == 'tanh':
+        R_c, W_c = _find_Rc_Wc_tanh(**common_kw)
+
+    # ---- Step 5: Convergence mask ----
+    converged = q_d_unp['converged'] & q_d_cfl['converged']
+    R_c = np.where(converged, R_c, np.nan)
+    W_c = np.where(converged, W_c, np.nan)
+
+    # ---- Step 6: Blend Qs at R_c for nucleation rate prefactor ----
+    S_at_Rc = S_func(np.where(np.isfinite(R_c), R_c, 0.0))
+    Qs_mixed = SimpleNamespace(
+        P_total=(1 - S_at_Rc) * Qs_unp.P_total + S_at_Rc * Qs_cfl.P_total,
+        e_total=(1 - S_at_Rc) * Qs_unp.e_total + S_at_Rc * Qs_cfl.e_total,
+    )
+
+    Gamma = nucleation_rate(W_c, R_c, sigma, H.T, H, Qs_mixed,
+                            xi_q, lambda_th, zeta_th)
+    tau = nucleation_time(Gamma, V)
+
+    # ---- Step 7: Build result ----
+    nuc_converged = (converged & np.isfinite(R_c)
+                     & np.isfinite(W_c) & (R_c > 0))
+
+    result = ThermalNucleationObservables(
+        eq_type=hadronic_table.eq_type,
+        hadronic_grids=Qstar_table_unp.hadronic_grids,
+        flavor_mode=flavor_mode,
+        electric_charge_mode=electric_charge_mode,
+        sigma=sigma,
+        V=V,
+        R_c=R_c,
+        W_c=W_c,
+        Gamma=Gamma,
+        tau=tau,
+        converged=nuc_converged,
+    )
+
+    if save_table:
+        if output_file is None:
+            output_file = (f"thermal_nucleation_unpCFL_"
+                           f"{hadronic_table.eq_type}.dat")
+        export_thermal_nucleation_table(result, output_file)
+
+    return result
+
+
+# =============================================================================
 # Main function
 # =============================================================================
 def compute_thermal_nucleation_observables(
@@ -963,6 +1342,13 @@ def compute_thermal_nucleation_observables(
     verbose=False,
     save_table=False,
     output_file=None,
+    switching_mode='step', # only used for unpCFL
+    Rx=None, # only used for unpCFL
+    switching_width=None, # only used for unpCFL
+    Qstar_table_unp=None, # only used for unpCFL
+    Qstar_table_cfl=None, # only used for unpCFL
+    R_max=20.0, # only used for unpCFL
+    n_R=500,
 ):
     """
     Compute thermal nucleation observables for the hadron-to-quark phase transition.
@@ -980,9 +1366,9 @@ def compute_thermal_nucleation_observables(
     V : float
         System volume (fm^3) for nucleation time.
     quark_phase : str
-        'unpaired' or 'cfl'.
+        'unpaired', 'cfl', or 'unpCFL'.
     Delta0 : float or None
-        CFL pairing gap (MeV). Required if quark_phase='cfl'.
+        CFL pairing gap (MeV). Required if quark_phase='cfl' or 'unpCFL'.
     flavor_mode : str
         'frozen' or 'saddlepoint'.
     electric_charge_mode : str
@@ -1000,6 +1386,20 @@ def compute_thermal_nucleation_observables(
         If True, export the result to a text file.
     output_file : str or None
         Output file path. Required if save_table is True.
+    switching_mode : str
+        'step' or 'tanh'. Only used when quark_phase='unpCFL'.
+    Rx : float or None
+        Crossover radius (fm). Required when quark_phase='unpCFL'.
+    switching_width : float or None
+        Tanh transition width delta (fm). Required when switching_mode='tanh'.
+    Qstar_table_unp : QstarTableData or None
+        Pre-computed unpaired Q* table. For unpCFL, avoids recomputation.
+    Qstar_table_cfl : QstarTableData or None
+        Pre-computed CFL Q* table. For unpCFL, avoids recomputation.
+    R_max : float
+        Maximum radius for W(R) evaluation in unpCFL (fm). Default 20.
+    n_R : int
+        Number of R grid points for W(R) evaluation in unpCFL. Default 500.
 
     Returns
     -------
@@ -1020,9 +1420,46 @@ def compute_thermal_nucleation_observables(
             raise ValueError(
                 f"frozen flavor_mode only supports 'lcn' or 'gcn', "
                 f"got '{electric_charge_mode}'")
-        if quark_phase == 'cfl':
+        if quark_phase in ('cfl', 'unpCFL'):
             raise ValueError(
-                "frozen flavor_mode does not support quark_phase='cfl'")
+                f"frozen flavor_mode does not support quark_phase='{quark_phase}'")
+    
+    # if we use unpCFL mode, we need an ad hoc function
+    if quark_phase == 'unpCFL':
+        if Rx is None:
+            raise ValueError("Rx required for quark_phase='unpCFL'")
+        if Delta0 is None:
+            raise ValueError("Delta0 required for quark_phase='unpCFL'")
+        if switching_mode == 'tanh' and switching_width is None:
+            raise ValueError("switching_width required for switching_mode='tanh'")
+        return _compute_thermal_nucleation_unpCFL(
+            hadronic_table=hadronic_table,
+            sigma=sigma,
+            params=params,
+            Delta0=Delta0,
+            V=V,
+            flavor_mode=flavor_mode,
+            electric_charge_mode=electric_charge_mode,
+            switching_mode=switching_mode,
+            Rx=Rx,
+            switching_width=switching_width,
+            Qstar_table_unp=Qstar_table_unp,
+            Qstar_table_cfl=Qstar_table_cfl,
+            R_max=R_max,
+            n_R=n_R,
+            include_photons=include_photons,
+            include_gluons=include_gluons,
+            include_thermal_neutrinos=include_thermal_neutrinos,
+            xi_q=xi_q,
+            lambda_th=lambda_th,
+            zeta_th=zeta_th,
+            initial_guess=initial_guess,
+            verbose=verbose,
+            save_table=save_table,
+            output_file=output_file,
+        )
+
+    # if not unpCFL, continue with the standard function
 
     # ---- Step 1: Compute Q* table if not already computed and passed ----
     if Qstar_table is None:

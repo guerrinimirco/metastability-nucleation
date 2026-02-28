@@ -23,6 +23,11 @@ from nucleation.energy_barrier.small_droplet.table import (
     export_table,
     GRID_AXES,
 )
+from nucleation.energy_barrier.small_droplet.barrier import (
+    switching_step,
+    switching_tanh,
+    get_switching_function,
+)
 from nucleation.energy_barrier.small_droplet.solvers import get_solver_Qs
 
 __all__ = [
@@ -47,6 +52,10 @@ __all__ = [
     "compute_Qstar_table",
     "export_table",
     "GRID_AXES",
+    # barrier — switching functions
+    "switching_step",
+    "switching_tanh",
+    "get_switching_function",
     # solvers
     "get_solver_Qs",
 ]
