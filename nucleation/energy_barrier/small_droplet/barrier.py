@@ -375,7 +375,7 @@ def switching_step(R, Rx):
     float or array
         Switching function value in [0, 1].
     """
-    return np.where(R >= Rx, 1.0, 0.0)
+    return np.where(R > Rx, 1.0, 0.0)
 
 
 def switching_tanh(R, Rx, delta):
