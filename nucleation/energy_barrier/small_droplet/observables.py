@@ -1729,20 +1729,38 @@ def compute_quantum_nucleation_observables(
 # =============================================================================
 def _find_Rc_Wc_step(R_c_unp, R_c_cfl, Rx, S_func,
                      Delta_f_unp, Delta_f_cfl,
-                     delta_n_C_unp, delta_n_C_cfl, sigma):
+                     delta_n_C_unp, delta_n_C_cfl, sigma,
+                     Delta_f_unp_atRx=None, delta_n_C_unp_atRx=None):
     """Critical radius and barrier height for step switching.
 
-    R_c = R_c_unp             if R_c_unp <= Rx
-    R_c = max(Rx, R_c_cfl)    if R_c_unp >  Rx
+    R_c = R_c_unp             if R_c_unp <= Rx  (and R_c_unp is finite)
+    R_c = max(Rx, R_c_cfl)    otherwise
+
+    When R_c = Rx (kink) and ``Delta_f_unp_atRx`` is provided
+    (coulomb_minimize mode), uses Delta_f evaluated at R = Rx instead
+    of the table value (which was evaluated at a different R_c).
 
     W_c = work_of_formation(R_c, blended Delta_f, sigma, blended delta_n_C)
     """
-    R_c = np.where(R_c_unp <= Rx, R_c_unp, np.maximum(Rx, R_c_cfl))
+    unp_exists = np.isfinite(R_c_unp)
+    R_c = np.where(unp_exists & (R_c_unp <= Rx),
+                   R_c_unp,
+                   np.maximum(Rx, R_c_cfl))
     S_at_Rc = S_func(R_c)
-    Delta_f_at_Rc = (1 - S_at_Rc) * Delta_f_unp + S_at_Rc * Delta_f_cfl
-    delta_n_C_at_Rc = (1 - S_at_Rc) * delta_n_C_unp + S_at_Rc * delta_n_C_cfl
+
+    # At kink (R_c = Rx, S=0): use Delta_f at Rx if available
+    if Delta_f_unp_atRx is not None:
+        at_kink = np.isclose(R_c, Rx) & (S_at_Rc < 0.5)
+        Df_unp = np.where(at_kink, Delta_f_unp_atRx, Delta_f_unp)
+        dnC_unp = np.where(at_kink, delta_n_C_unp_atRx, delta_n_C_unp)
+    else:
+        Df_unp = Delta_f_unp
+        dnC_unp = delta_n_C_unp
+
+    Delta_f_at_Rc = (1 - S_at_Rc) * Df_unp + S_at_Rc * Delta_f_cfl
+    delta_n_C_at_Rc = (1 - S_at_Rc) * dnC_unp + S_at_Rc * delta_n_C_cfl
     W_c = work_of_formation(R_c, Delta_f_at_Rc, sigma, delta_n_C_at_Rc)
-    return R_c, W_c
+    return R_c, W_c, S_at_Rc
 
 
 def _find_Rc_Wc_tanh(R_c_unp, R_c_cfl, Rx, S_func,
@@ -1788,6 +1806,105 @@ def _find_Rc_Wc_tanh(R_c_unp, R_c_cfl, Rx, S_func,
             flat_Wc[k] = -sol.fun
 
     return flat_Rc.reshape(shape), flat_Wc.reshape(shape)
+
+
+# =============================================================================
+# unpCFL: Q* at fixed R (coulomb_minimize)
+# =============================================================================
+def _compute_Qs_at_R(R, hadronic_table, params, sigma,
+                     quark_phase='unpaired', Delta0=None,
+                     include_photons=True, include_gluons=True,
+                     include_thermal_neutrinos=True,
+                     initial_guess=None, verbose=False):
+    """Compute Q* at fixed radius R over the hadronic grid.
+
+    Used for ``coulomb_minimize`` mode where Q* depends on R through
+    ``coulomb_delta_mu_e(R, delta_n_C)``.
+
+    Parameters
+    ----------
+    R : float
+        Fixed droplet radius (fm).
+    hadronic_table : EOSTableData
+    params : AlphaBagParams
+    sigma : float
+        Surface tension (MeV/fm^2).
+    quark_phase : str
+        'unpaired' or 'cfl'.
+    Delta0 : float or None
+        CFL pairing gap. Required if quark_phase='cfl'.
+
+    Returns
+    -------
+    dict
+        Arrays with same keys as QstarTableData.data.
+    """
+    from nucleation.energy_barrier.small_droplet.table import (
+        _init_data, _build_H_from_table, _BASE_DATA_KEYS,
+    )
+
+    eq_type = hadronic_table.eq_type
+    grids = hadronic_table.grids
+    n_B_arr, T_arr = grids['n_B'], grids['T']
+    solver_kw = dict(include_photons=include_photons,
+                     include_gluons=include_gluons,
+                     include_thermal_neutrinos=include_thermal_neutrinos)
+
+    if eq_type == 'beta_eq':
+        shape = (len(n_B_arr), len(T_arr))
+        outer_arr = None
+    elif eq_type == 'trapped_neutrinos':
+        outer_arr = grids['Y_L']
+        shape = (len(n_B_arr), len(outer_arr), len(T_arr))
+    elif eq_type == 'fixed_yc':
+        outer_arr = grids['Y_C']
+        shape = (len(n_B_arr), len(outer_arr), len(T_arr))
+    else:
+        raise ValueError(f"Unsupported eq_type: '{eq_type}'")
+
+    data = _init_data(shape)
+    n_outer = len(outer_arr) if outer_arr is not None else 1
+    guess = initial_guess
+
+    for i_o in range(n_outer):
+        for i_T in range(len(T_arr)):
+            row_conv = 0
+            for i_nB in range(len(n_B_arr)):
+                if eq_type == 'beta_eq':
+                    idx = (i_nB, i_T)
+                    gv = {'T': T_arr[i_T]}
+                elif eq_type == 'trapped_neutrinos':
+                    idx = (i_nB, i_o, i_T)
+                    gv = {'T': T_arr[i_T], 'Y_L': outer_arr[i_o]}
+                elif eq_type == 'fixed_yc':
+                    idx = (i_nB, i_o, i_T)
+                    gv = {'T': T_arr[i_T], 'Y_C': outer_arr[i_o]}
+
+                H_pt = _build_H_from_table(hadronic_table, eq_type, idx, gv)
+
+                if quark_phase == 'cfl':
+                    result = solve_saddlepoint_minimizecoulomb_cfl_at_R(
+                        R, H_pt, params, Delta0, sigma, **solver_kw,
+                        initial_guess=guess)
+                else:
+                    result = solve_saddlepoint_minimizecoulomb_at_R(
+                        R, H_pt, params, sigma, **solver_kw,
+                        initial_guess=guess)
+
+                if result is not None:
+                    for key in _BASE_DATA_KEYS:
+                        data[key][idx] = getattr(result, key)
+                    data['converged'][idx] = True
+                    data['R_c'][idx] = R
+                    guess = np.array([result.mu_u, result.mu_d,
+                                      result.mu_s, result.mu_e])
+                    row_conv += 1
+
+            if verbose:
+                print(f"  Q* at R={R:.2f}: T={T_arr[i_T]:.1f} "
+                      f"-> {row_conv}/{len(n_B_arr)} converged")
+
+    return data
 
 
 # =============================================================================
@@ -1873,6 +1990,16 @@ def _compute_thermal_nucleation_unpCFL(
             **common_table_kw,
         )
 
+    # ---- Step 1b: Q* at R=Rx for coulomb_minimize ----
+    if electric_charge_mode == 'coulomb_minimize':
+        if verbose:
+            print("Computing unpaired Q* at R=Rx...")
+        q_d_unp_atRx = _compute_Qs_at_R(
+            Rx, hadronic_table, params_unp, sigma,
+            quark_phase='unpaired', **common_table_kw)
+    else:
+        q_d_unp_atRx = None
+
     # ---- Step 2: Build phase data ----
     h_d = hadronic_table.data
     q_d_unp = Qstar_table_unp.data
@@ -1925,6 +2052,20 @@ def _compute_thermal_nucleation_unpCFL(
         delta_n_C_unp = (Qs_unp.Y_C - Qs_unp.Y_e) * Qs_unp.n_B
         delta_n_C_cfl = (Qs_cfl.Y_C - Qs_cfl.Y_e) * Qs_cfl.n_B
 
+    # ---- Step 3b: Driving forces at R=Rx (coulomb_minimize) ----
+    if q_d_unp_atRx is not None:
+        Qs_unp_atRx = SimpleNamespace(**{
+            **q_d_unp_atRx,
+            'T': T_H, 'mu_nu': mu_nu_H, 'Y_nu': Y_nu_H,
+        })
+        Delta_f_unp_atRx = driving_force(Qs_unp_atRx, H)
+        delta_n_C_unp_atRx = (
+            (Qs_unp_atRx.Y_C - Qs_unp_atRx.Y_e) * Qs_unp_atRx.n_B)
+    else:
+        Qs_unp_atRx = None
+        Delta_f_unp_atRx = None
+        delta_n_C_unp_atRx = None
+
     # ---- Step 4: Critical radius and barrier height ----
     S_func = get_switching_function(switching_mode, Rx, switching_width)
     R_c_unp = q_d_unp['R_c']
@@ -1937,20 +2078,31 @@ def _compute_thermal_nucleation_unpCFL(
     )
 
     if switching_mode == 'step':
-        R_c, W_c = _find_Rc_Wc_step(**common_kw)
+        extra_kw = {}
+
+        if Delta_f_unp_atRx is not None:
+            extra_kw['Delta_f_unp_atRx'] = Delta_f_unp_atRx
+            extra_kw['delta_n_C_unp_atRx'] = delta_n_C_unp_atRx
+
+        R_c, W_c, S_at_Rc = _find_Rc_Wc_step(**common_kw, **extra_kw)
+
     elif switching_mode == 'tanh':
+        if Delta_f_unp_atRx is not None:
+            raise ValueError("Coulomb_minimize mode not yet introduced for switching_mode == 'tanh'.")
         R_c, W_c = _find_Rc_Wc_tanh(**common_kw)
+        S_at_Rc = None
 
-    # ---- Step 5: Convergence mask ----
-    converged = q_d_unp['converged'] & q_d_cfl['converged']
-    R_c = np.where(converged, R_c, np.nan)
-    W_c = np.where(converged, W_c, np.nan)
 
-    # ---- Step 6: Blend Qs at R_c for nucleation rate prefactor ----
-    S_at_Rc = S_func(np.where(np.isfinite(R_c), R_c, 0.0))
+    P_unp = Qs_unp.P_total
+    e_unp = Qs_unp.e_total
+    if Qs_unp_atRx is not None:
+        at_kink = np.isclose(R_c, Rx) & (S_at_Rc < 0.5)
+        P_unp = np.where(at_kink, Qs_unp_atRx.P_total, P_unp)
+        e_unp = np.where(at_kink, Qs_unp_atRx.e_total, e_unp)
+
     Qs_mixed = SimpleNamespace(
-        P_total=(1 - S_at_Rc) * Qs_unp.P_total + S_at_Rc * Qs_cfl.P_total,
-        e_total=(1 - S_at_Rc) * Qs_unp.e_total + S_at_Rc * Qs_cfl.e_total,
+        P_total=(1 - S_at_Rc) * P_unp + S_at_Rc * Qs_cfl.P_total,
+        e_total=(1 - S_at_Rc) * e_unp + S_at_Rc * Qs_cfl.e_total,
     )
 
     Gamma = nucleation_rate(W_c, R_c, sigma, H.T, H, Qs_mixed,
@@ -1958,8 +2110,7 @@ def _compute_thermal_nucleation_unpCFL(
     tau = nucleation_time(Gamma, V)
 
     # ---- Step 7: Build result ----
-    nuc_converged = (converged & np.isfinite(R_c)
-                     & np.isfinite(W_c) & (R_c > 0))
+    nuc_converged = (converged & np.isfinite(R_c) & np.isfinite(W_c) & (R_c > 0))
 
     result = ThermalNucleationObservables(
         eq_type=hadronic_table.eq_type,
