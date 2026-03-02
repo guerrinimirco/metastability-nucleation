@@ -1823,8 +1823,10 @@ def _compute_Qs_at_R(R, hadronic_table, params, sigma,
 
     Parameters
     ----------
-    R : float
-        Fixed droplet radius (fm).
+    R : float or array_like
+        Droplet radius (fm).  Can be a scalar (same R for all T)
+        or a 1-D array with one element per temperature grid point
+        (T-dependent R, e.g. Rx = hc / Delta(T)).
     hadronic_table : EOSTableData
     params : AlphaBagParams
     sigma : float
@@ -1850,6 +1852,12 @@ def _compute_Qs_at_R(R, hadronic_table, params, sigma,
                      include_gluons=include_gluons,
                      include_thermal_neutrinos=include_thermal_neutrinos)
 
+    # Support R as scalar or 1-D array (one value per T)
+    R_arr = np.atleast_1d(np.asarray(R, dtype=float))
+    R_is_scalar = (R_arr.ndim == 1 and R_arr.size == 1)
+    if R_is_scalar:
+        R_arr = np.full(len(T_arr), R_arr[0])
+
     if eq_type == 'beta_eq':
         shape = (len(n_B_arr), len(T_arr))
         outer_arr = None
@@ -1868,6 +1876,7 @@ def _compute_Qs_at_R(R, hadronic_table, params, sigma,
 
     for i_o in range(n_outer):
         for i_T in range(len(T_arr)):
+            R_val = float(R_arr[i_T])
             row_conv = 0
             for i_nB in range(len(n_B_arr)):
                 if eq_type == 'beta_eq':
@@ -1884,24 +1893,24 @@ def _compute_Qs_at_R(R, hadronic_table, params, sigma,
 
                 if quark_phase == 'cfl':
                     result = solve_saddlepoint_minimizecoulomb_cfl_at_R(
-                        R, H_pt, params, Delta0, sigma, **solver_kw,
+                        R_val, H_pt, params, Delta0, sigma, **solver_kw,
                         initial_guess=guess)
                 else:
                     result = solve_saddlepoint_minimizecoulomb_at_R(
-                        R, H_pt, params, sigma, **solver_kw,
+                        R_val, H_pt, params, sigma, **solver_kw,
                         initial_guess=guess)
 
                 if result is not None:
                     for key in _BASE_DATA_KEYS:
                         data[key][idx] = getattr(result, key)
                     data['converged'][idx] = True
-                    data['R_c'][idx] = R
+                    data['R_c'][idx] = R_val
                     guess = np.array([result.mu_u, result.mu_d,
                                       result.mu_s, result.mu_e])
                     row_conv += 1
 
             if verbose:
-                print(f"  Q* at R={R:.2f}: T={T_arr[i_T]:.1f} "
+                print(f"  Q* at R={R_val:.2f}: T={T_arr[i_T]:.1f} "
                       f"-> {row_conv}/{len(n_B_arr)} converged")
 
     return data
