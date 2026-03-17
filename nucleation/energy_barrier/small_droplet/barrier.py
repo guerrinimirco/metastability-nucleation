@@ -28,11 +28,53 @@ Driving force:
     driving_force : Delta_f_bulk = -(P_Qs - P_H) + n_B sum_i Y_i (dmu_i)
 """
 
+from numpy import exp
+from math import cosh, sinh
 import numpy as np
 from scipy.optimize import root
 from eos.general.physics_constants import alpha_EM, hc
 
+# =============================================================================
+# Bulk driving force
+# =============================================================================
+def driving_force(Qs, H):
+    """
+    Bulk driving force for nucleation if the Q* droplet is much smaller than the total volume.
 
+    #### H is metastable if f_Qs < f_H, i.e. Delta_f_bulk < 0. ####
+
+    Delta_f_bulk = F_Qs - F_H = -(P_Qs - P_H) + n_B_Qs * sum_i Y_i^Qs (mu_i^Qs - mu_i^H)
+
+    where i = B, C, S, e, nu and Y_B = 1 by definition.
+
+    Parameters
+    ----------
+    Qs : namespace
+        Q* phase state. Required attributes:
+        P_total, n_B, mu_B, mu_C, mu_S, mu_e, mu_nu, Y_C, Y_S, Y_e, Y_nu.
+    H : namespace
+        Hadronic phase state. Required attributes:
+        P_total, mu_B, mu_C, mu_S, mu_e, mu_nu.
+
+    Returns
+    -------
+    float or ndarray
+        Bulk driving force (MeV/fm^3). Negative when quark phase is favored
+        (hadronic phase metastable).
+    """
+    Delta_P = Qs.P_total - H.P_total
+    chem_sum = (
+        1.0 * (Qs.mu_B - H.mu_B)
+        + Qs.Y_C * (Qs.mu_C - H.mu_C)
+        + Qs.Y_S * (Qs.mu_S - H.mu_S)
+        + Qs.Y_e * (Qs.mu_e - H.mu_e)
+        + Qs.Y_nu * (Qs.mu_nu - H.mu_nu)
+    )
+    return -Delta_P + Qs.n_B * chem_sum
+
+# =============================================================================
+# Bulk and surface work of formation
+# =============================================================================
 
 def bulk_W(R, Delta_f_bulk):
     """Bulk (volume) contribution to the work of formation.
@@ -238,7 +280,7 @@ def critical_radius_noCoulomb(Delta_f_bulk, sigma):
     Returns
     -------
     float or ndarray
-        Critical radius R_c (fm). NaN where Delta_f_bulk <= 0.
+        Critical radius R_c (fm). NaN where Delta_f_bulk >= 0.
     """
     Delta_f_bulk = np.asarray(Delta_f_bulk, dtype=float)
     return np.where(Delta_f_bulk < 0, -2.0 * sigma / Delta_f_bulk, np.nan)
@@ -300,11 +342,9 @@ def critical_radius_coulomb(Delta_f_bulk, sigma, delta_n_C, initial_guess=None):
         return np.nan
 
     def dW_dR(R):
-        return (4.0 * np.pi * R**2 * Delta_f_bulk
-                + 8.0 * np.pi * R * sigma
-                + (16.0 / 3.0) * np.pi**2 * hc * alpha_EM * delta_n_C**2 * R**4)
+        return (Delta_f_bulk + 2.0 * sigma / R - coulomb_P(R, delta_n_C))
     
-    # note that defining P_Coul=-dE/dVQ|_ni = - 1/(4 Pi R^2) * dE/dR|_ni
+    # note that defining P_Coul=-dE/dVQ|_ni = - 1/(4 Pi R^2) * dEcoulomb/dR|_ni
     # P_Coul = - 4/3 * pi * hc * alpha_EM * delta_n_C^2 * R^2 that is coulomb_P().
 
     if initial_guess is None:
@@ -316,43 +356,134 @@ def critical_radius_coulomb(Delta_f_bulk, sigma, delta_n_C, initial_guess=None):
 
 
 
+
+
 # =============================================================================
-# Bulk driving force
+# Coulomb correction terms with electron charge screening
 # =============================================================================
-def driving_force(Qs, H):
+
+def f_screening_linearized(x):
     """
-    Bulk driving force for nucleation if the Q* droplet is much smaller than the total volume.
+    Screening function for linearized Coulomb correction.
+    """
+    return 5/(2*x**5)*(x**3-3*(x+1)*(x*cosh(x)-sinh(x))*exp(-x))
 
-    #### H is metastable if f_Qs < f_H, i.e. Delta_f_bulk < 0. ####
+def df_screening_linearized(x):
+    """
+    Derivative of screening function for linearized Coulomb correction.
 
-    Delta_f_bulk = F_Qs - F_H = -(P_Qs - P_H) + n_B_Qs * sum_i Y_i^Qs (mu_i^Qs - mu_i^H)
+    f'(x) = 15*[(x-1) + (x+1)*exp(-2x)] / (2*x^4) - 5*f(x)/x
 
-    where i = B, C, S, e, nu and Y_B = 1 by definition.
+    Derived from f(x) = 5/(2x^5) * g(x) with
+    g'(x) = 3x[(x-1) + (x+1)*exp(-2x)].
+    """
+    return (15.0 * ((x - 1) + (x + 1) * exp(-2*x)) / (2.0 * x**4)
+            - 5.0 * f_screening_linearized(x) / x)
+
+def debye_length(chi):
+    """
+    Debye screening length of electrons for linearized Coulomb correction.
+
+    lambda_D = 1 / sqrt(4 pi alpha_EM hbar*c chi)
+
+    where chi = dn_e/dmu_e |_T is the electron number susceptibility.
 
     Parameters
     ----------
-    Qs : namespace
-        Q* phase state. Required attributes:
-        P_total, n_B, mu_B, mu_C, mu_S, mu_e, mu_nu, Y_C, Y_S, Y_e, Y_nu.
-    H : namespace
-        Hadronic phase state. Required attributes:
-        P_total, mu_B, mu_C, mu_S, mu_e, mu_nu.
+    chi : float or array
+        Electron number susceptibility dn_e/dmu_e (fm^-3 MeV^-1).
 
     Returns
     -------
-    float or ndarray
-        Bulk driving force (MeV/fm^3). Positive when quark phase is favored.
+    float or array
+        Debye length (fm).
     """
-    Delta_P = Qs.P_total - H.P_total
-    chem_sum = (
-        1.0 * (Qs.mu_B - H.mu_B)
-        + Qs.Y_C * (Qs.mu_C - H.mu_C)
-        + Qs.Y_S * (Qs.mu_S - H.mu_S)
-        + Qs.Y_e * (Qs.mu_e - H.mu_e)
-        + Qs.Y_nu * (Qs.mu_nu - H.mu_nu)
-    )
-    return -Delta_P + Qs.n_B * chem_sum
+    return 1.0 / np.sqrt(4.0 * np.pi * alpha_EM * hc * chi)
 
+def coulomb_screening_linearized_W(R, delta_n_C, lambda_D):
+    """
+    Coulomb contribution to the work of formation with Debye screening.
+
+    W_Coulomb = (16/15) pi^2 hbar*c alpha_em delta_n_C^2 R^5 f(R/lambda_D)
+
+    Parameters
+    ----------
+    R : float or array
+        Droplet radius (fm).
+    delta_n_C : float or array
+        Net charge density (fm^-3).
+    lambda_D : float
+        Debye screening length (fm).
+
+    Returns
+    -------
+    float or array
+        Coulomb contribution to W (MeV).
+    """
+    return (16.0 / 15.0) * np.pi**2 * hc * alpha_EM * delta_n_C**2 * R**5 * f_screening_linearized(R / lambda_D)
+
+
+def coulomb_screening_linearized_P(R, delta_n_C, lambda_D):
+    """
+    Coulomb contribution to the pressure with Debye screening.
+
+    P_Coulomb = -(4/3) pi hbar*c alpha_em delta_n_C^2 R^2 [f(x) + 1/5 x f'(x)]
+
+    where x = R/lambda_D.
+
+    Parameters
+    ----------
+    R : float or array
+        Droplet radius (fm).
+    delta_n_C : float or array
+        Net charge density (fm^-3).
+    lambda_D : float
+        Debye screening length (fm).
+
+    Returns
+    -------
+    float or array
+        Coulomb pressure contribution (MeV/fm^3).
+    """
+    x = R / lambda_D
+    return -(4.0 / 3.0) * np.pi * hc * alpha_EM * delta_n_C**2 * R**2 * (
+        f_screening_linearized(x) + (1.0 / 5.0) * x * df_screening_linearized(x))
+
+def critical_radius_coulomb_screening_linearized(Delta_f_bulk, sigma, delta_n_C, lambda_D, initial_guess=None):
+    """
+    Critical radius including screened Coulomb correction.
+
+    Solves dW/dR = 0 where W = bulk + surface + screened Coulomb.
+
+    Parameters
+    ----------
+    Delta_f_bulk : float
+        Bulk driving force (MeV/fm^3). Scalar.
+    sigma : float
+        Surface tension (MeV/fm^2).
+    delta_n_C : float
+        Net charge density n_C_Q - n_e_Q (fm^-3). Scalar.
+    lambda_D : float
+        Debye screening length (fm).
+
+    Returns
+    -------
+    float
+        Critical radius R_c (fm). NaN if no solution.
+    """
+    if Delta_f_bulk >= 0 or np.isnan(Delta_f_bulk):
+        return np.nan
+
+    def dW_dR(R):
+        return (Delta_f_bulk + 2.0 * sigma / R
+                - coulomb_screening_linearized_P(R, delta_n_C, lambda_D))
+
+    if initial_guess is None:
+        initial_guess = - 2.0 * sigma / Delta_f_bulk
+    sol = root(dW_dR, initial_guess)
+    if sol.success:
+        return float(sol.x[0])
+    return np.nan
 
 # =============================================================================
 # Switching functions for unpCFL (radius-dependent phase blending)
@@ -360,8 +491,8 @@ def driving_force(Qs, H):
 def switching_step(R, Rx):
     """Step switching function for unpCFL phase blending.
 
-    S(R) = 0 for R < Rx  (unpaired)
-    S(R) = 1 for R >= Rx (CFL)
+    S(R) = 0 for R <= Rx  (unpaired)
+    S(R) = 1 for R > Rx   (CFL)
 
     Parameters
     ----------

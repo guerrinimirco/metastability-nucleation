@@ -1199,8 +1199,6 @@ def compute_thermal_nucleation_observables(
             switching_width=switching_width,
             Qstar_table_unp=Qstar_table_unp,
             Qstar_table_cfl=Qstar_table_cfl,
-            R_max=R_max,
-            n_R=n_R,
             include_photons=include_photons,
             include_gluons=include_gluons,
             include_thermal_neutrinos=include_thermal_neutrinos,
@@ -1809,7 +1807,7 @@ def _find_Rc_Wc_tanh(R_c_unp, R_c_cfl, Rx, S_func,
 
 
 # =============================================================================
-# unpCFL: Q* at fixed R (coulomb_minimize)
+# unpCFL: Q* at fixed R (coulomb_minimize) 
 # =============================================================================
 def _compute_Qs_at_R(R, hadronic_table, params, sigma,
                      quark_phase='unpaired', Delta0=None,
@@ -1933,8 +1931,6 @@ def _compute_thermal_nucleation_unpCFL(
     switching_width,
     Qstar_table_unp,
     Qstar_table_cfl,
-    R_max,
-    n_R,
     include_photons,
     include_gluons,
     include_thermal_neutrinos,
@@ -2003,7 +1999,7 @@ def _compute_thermal_nucleation_unpCFL(
     if electric_charge_mode == 'coulomb_minimize':
         if verbose:
             print("Computing unpaired Q* at R=Rx...")
-        q_d_unp_atRx = _compute_Qs_at_R(
+        q_d_unp_atRx = _compute_Qs_at_R(#####put in table... needs vec R[nBH,T,..]
             Rx, hadronic_table, params_unp, sigma,
             quark_phase='unpaired', **common_table_kw)
     else:
@@ -2095,11 +2091,36 @@ def _compute_thermal_nucleation_unpCFL(
 
         R_c, W_c, S_at_Rc = _find_Rc_Wc_step(**common_kw, **extra_kw)
 
+        # Diagnostic: compare W at all three candidate radii
+        if verbose:
+            Df_unp_diag = (Delta_f_unp_atRx
+                           if Delta_f_unp_atRx is not None
+                           else Delta_f_unp)
+            dnC_unp_diag = (delta_n_C_unp_atRx
+                            if delta_n_C_unp_atRx is not None
+                            else delta_n_C_unp)
+            W_at_unp = np.where(
+                np.isfinite(R_c_unp) & (R_c_unp <= Rx),
+                work_of_formation(R_c_unp, Delta_f_unp, sigma, delta_n_C_unp),
+                np.nan)
+            W_at_kink = work_of_formation(
+                Rx, Df_unp_diag, sigma, dnC_unp_diag)
+            W_at_cfl = np.where(
+                np.isfinite(R_c_cfl) & (R_c_cfl > Rx),
+                work_of_formation(R_c_cfl, Delta_f_cfl, sigma, delta_n_C_cfl),
+                np.nan)
+            W_max = np.fmax(np.fmax(W_at_unp, W_at_kink), W_at_cfl)
+            mismatch = np.isfinite(W_max) & np.isfinite(W_c) & (W_max > W_c * 1.01)
+            n_mismatch = int(np.sum(mismatch))
+            if n_mismatch > 0:
+                print(f"  WARNING: {n_mismatch} grid points where the selected "
+                      f"R_c does not give the highest W barrier.")
+
     elif switching_mode == 'tanh':
         if Delta_f_unp_atRx is not None:
-            raise ValueError("Coulomb_minimize mode not yet introduced for switching_mode == 'tanh'.")
+            raise NotImplementedError("Coulomb_minimize mode not yet implemented for switching_mode == 'tanh'.")
         R_c, W_c = _find_Rc_Wc_tanh(**common_kw)
-        S_at_Rc = None
+        S_at_Rc = S_func(R_c)
 
 
     P_unp = Qs_unp.P_total
@@ -2119,6 +2140,7 @@ def _compute_thermal_nucleation_unpCFL(
     tau = nucleation_time(Gamma, V)
 
     # ---- Step 7: Build result ----
+    converged = q_d_unp['converged'] & q_d_cfl['converged']
     nuc_converged = (converged & np.isfinite(R_c) & np.isfinite(W_c) & (R_c > 0))
 
     result = ThermalNucleationObservables(
