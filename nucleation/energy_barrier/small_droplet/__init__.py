@@ -14,6 +14,7 @@ from nucleation.energy_barrier.small_droplet.observables import (
     load_thermal_nucleation_table,
     QuantumNucleationObservables,
     compute_quantum_nucleation_observables,
+    compute_Qs_along_R,
 )
 from nucleation.energy_barrier.small_droplet.table import (
     QstarTableData,
@@ -45,6 +46,7 @@ __all__ = [
     "load_thermal_nucleation_table",
     "QuantumNucleationObservables",
     "compute_quantum_nucleation_observables",
+    "compute_Qs_along_R",
     # table
     "QstarTableData",
     "load_Qstar_table",

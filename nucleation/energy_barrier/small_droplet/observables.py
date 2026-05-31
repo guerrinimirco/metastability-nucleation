@@ -1087,11 +1087,13 @@ def compute_thermal_nucleation_observables(
     verbose=False,
     save_table=False,
     output_file=None,
+    R_gcn_skip=None, # coulomb_minimize fast-path cutoff on R_c_gcn (fm)
     switching_mode='step', # only used for unpCFL
     Rx=None, # only used for unpCFL
     switching_width=None, # only used for unpCFL
     Qstar_table_unp=None, # only used for unpCFL
     Qstar_table_cfl=None, # only used for unpCFL
+    Qstar_table_unp_atRx=None, # only used for unpCFL coulomb_minimize
     params_unp=None, # only used for unpCFL (overrides params for unpaired)
     params_cfl=None, # only used for unpCFL (overrides params for CFL)
     R_max=20.0, # only used for unpCFL
@@ -1133,6 +1135,10 @@ def compute_thermal_nucleation_observables(
         If True, export the result to a text file.
     output_file : str or None
         Output file path. Required if save_table is True.
+    R_gcn_skip : float or None
+        coulomb_minimize speed-up: GCN-critical-radius cutoff (fm). Grid points
+        whose R_c_gcn exceeds it skip the expensive solver fallbacks (a single
+        quick attempt is made). None disables the heuristic (np.inf).
     switching_mode : str
         'step' or 'tanh'. Only used when quark_phase='unpCFL'.
     Rx : float or None
@@ -1143,6 +1149,11 @@ def compute_thermal_nucleation_observables(
         Pre-computed unpaired Q* table. For unpCFL, avoids recomputation.
     Qstar_table_cfl : QstarTableData or None
         Pre-computed CFL Q* table. For unpCFL, avoids recomputation.
+    Qstar_table_unp_atRx : QstarTableData or None
+        Pre-computed unpaired Q* evaluated at R=Rx (from ``_compute_Qs_at_R``).
+        Only used for unpCFL + coulomb_minimize (the kink correction). If
+        None, computed internally. Persist/reuse it by computing it once with
+        ``_compute_Qs_at_R(Rx, ..., save_table=True)`` and loading it back.
     params_unp : AlphaBagParams or None
         Quark EOS parameters for the unpaired phase. For unpCFL only.
         If None, falls back to ``params``.
@@ -1199,6 +1210,7 @@ def compute_thermal_nucleation_observables(
             switching_width=switching_width,
             Qstar_table_unp=Qstar_table_unp,
             Qstar_table_cfl=Qstar_table_cfl,
+            Qstar_table_unp_atRx=Qstar_table_unp_atRx,
             include_photons=include_photons,
             include_gluons=include_gluons,
             include_thermal_neutrinos=include_thermal_neutrinos,
@@ -1209,6 +1221,7 @@ def compute_thermal_nucleation_observables(
             verbose=verbose,
             save_table=save_table,
             output_file=output_file,
+            R_gcn_skip=R_gcn_skip,
         )
 
     # if not unpCFL, continue with the standard function
@@ -1236,6 +1249,7 @@ def compute_thermal_nucleation_observables(
             include_thermal_neutrinos=include_thermal_neutrinos,
             initial_guess=initial_guess,
             verbose=verbose,
+            R_gcn_skip=R_gcn_skip,
         )
 
     # ---- Step 2: Build phase data ----
@@ -1725,6 +1739,20 @@ def compute_quantum_nucleation_observables(
 # =============================================================================
 # unpCFL: R_c and W_c finders (step vs tanh)
 # =============================================================================
+def _blend_phase(S, A_unp, B_cfl):
+    """S-selective blend (1-S)*A_unp + S*B_cfl that is NaN-safe at the ends.
+
+    Where S==0 the result is exactly A_unp (even if B_cfl is NaN), and where
+    S==1 it is exactly B_cfl (even if A_unp is NaN). This avoids the
+    ``0*NaN -> NaN`` poisoning that occurs when one phase failed to converge
+    but the switching function selects the other phase (the common step case).
+    """
+    S = np.asarray(S, dtype=float)
+    mixed = (1.0 - S) * A_unp + S * B_cfl
+    out = np.where(S <= 0.0, A_unp, np.where(S >= 1.0, B_cfl, mixed))
+    return out
+
+
 def _find_Rc_Wc_step(R_c_unp, R_c_cfl, Rx, S_func,
                      Delta_f_unp, Delta_f_cfl,
                      delta_n_C_unp, delta_n_C_cfl, sigma,
@@ -1755,8 +1783,8 @@ def _find_Rc_Wc_step(R_c_unp, R_c_cfl, Rx, S_func,
         Df_unp = Delta_f_unp
         dnC_unp = delta_n_C_unp
 
-    Delta_f_at_Rc = (1 - S_at_Rc) * Df_unp + S_at_Rc * Delta_f_cfl
-    delta_n_C_at_Rc = (1 - S_at_Rc) * dnC_unp + S_at_Rc * delta_n_C_cfl
+    Delta_f_at_Rc = _blend_phase(S_at_Rc, Df_unp, Delta_f_cfl)
+    delta_n_C_at_Rc = _blend_phase(S_at_Rc, dnC_unp, delta_n_C_cfl)
     W_c = work_of_formation(R_c, Delta_f_at_Rc, sigma, delta_n_C_at_Rc)
     return R_c, W_c, S_at_Rc
 
@@ -1813,18 +1841,25 @@ def _compute_Qs_at_R(R, hadronic_table, params, sigma,
                      quark_phase='unpaired', Delta0=None,
                      include_photons=True, include_gluons=True,
                      include_thermal_neutrinos=True,
-                     initial_guess=None, verbose=False):
+                     initial_guess=None, verbose=False,
+                     save_table=False, output_file=None):
     """Compute Q* at fixed radius R over the hadronic grid.
 
     Used for ``coulomb_minimize`` mode where Q* depends on R through
-    ``coulomb_delta_mu_e(R, delta_n_C)``.
+    ``coulomb_delta_mu_e(R, delta_n_C)`` (e.g. the unpaired Q* at the
+    crossover R=Rx(T) needed by the unpCFL kink correction).
 
     Parameters
     ----------
     R : float or array_like
-        Droplet radius (fm).  Can be a scalar (same R for all T)
-        or a 1-D array with one element per temperature grid point
-        (T-dependent R, e.g. Rx = hc / Delta(T)).
+        Droplet radius (fm). Accepted shapes:
+          * scalar                  -> same R at every grid point;
+          * 1-D, length len(T)      -> one R per temperature (T-dependent
+            Rx, broadcast over n_B and any outer axis);
+          * full grid, == data shape -> R[n_B, T] (and outer axis), the
+            most general ``R[nBH, T, ..]`` case.
+        Non-finite entries (``Rx = inf`` at T >= T_c, where the droplet is
+        purely unpaired) are skipped: those points get converged=False.
     hadronic_table : EOSTableData
     params : AlphaBagParams
     sigma : float
@@ -1833,14 +1868,20 @@ def _compute_Qs_at_R(R, hadronic_table, params, sigma,
         'unpaired' or 'cfl'.
     Delta0 : float or None
         CFL pairing gap. Required if quark_phase='cfl'.
+    save_table : bool
+        If True, export the resulting table to ``output_file``.
+    output_file : str or None
+        Output path; defaults to ``Qstar_atR_{eq_type}.dat``.
 
     Returns
     -------
-    dict
-        Arrays with same keys as QstarTableData.data.
+    QstarTableData
+        Same structure as ``compute_Qstar_table``; ``R_c`` holds the fixed
+        R used at each converged point.
     """
     from nucleation.energy_barrier.small_droplet.table import (
         _init_data, _build_H_from_table, _BASE_DATA_KEYS,
+        QstarTableData, export_table,
     )
 
     eq_type = hadronic_table.eq_type
@@ -1850,23 +1891,25 @@ def _compute_Qs_at_R(R, hadronic_table, params, sigma,
                      include_gluons=include_gluons,
                      include_thermal_neutrinos=include_thermal_neutrinos)
 
-    # Support R as scalar or 1-D array (one value per T)
-    R_arr = np.atleast_1d(np.asarray(R, dtype=float))
-    R_is_scalar = (R_arr.ndim == 1 and R_arr.size == 1)
-    if R_is_scalar:
-        R_arr = np.full(len(T_arr), R_arr[0])
-
     if eq_type == 'beta_eq':
         shape = (len(n_B_arr), len(T_arr))
         outer_arr = None
+        grid_out = {'n_B_H': n_B_arr, 'T': T_arr}
     elif eq_type == 'trapped_neutrinos':
         outer_arr = grids['Y_L']
         shape = (len(n_B_arr), len(outer_arr), len(T_arr))
+        grid_out = {'n_B_H': n_B_arr, 'Y_L_H': outer_arr, 'T': T_arr}
     elif eq_type == 'fixed_yc':
         outer_arr = grids['Y_C']
         shape = (len(n_B_arr), len(outer_arr), len(T_arr))
+        grid_out = {'n_B_H': n_B_arr, 'Y_C_H': outer_arr, 'T': T_arr}
     else:
         raise ValueError(f"Unsupported eq_type: '{eq_type}'")
+
+    # Broadcast R to the full data shape. Scalar -> everywhere; 1-D length
+    # len(T) -> per-T (trailing axis is T); full-grid -> as given. numpy's
+    # trailing-axis rule makes all three cases a single broadcast.
+    R_full = np.broadcast_to(np.asarray(R, dtype=float), shape)
 
     data = _init_data(shape)
     n_outer = len(outer_arr) if outer_arr is not None else 1
@@ -1874,7 +1917,6 @@ def _compute_Qs_at_R(R, hadronic_table, params, sigma,
 
     for i_o in range(n_outer):
         for i_T in range(len(T_arr)):
-            R_val = float(R_arr[i_T])
             row_conv = 0
             for i_nB in range(len(n_B_arr)):
                 if eq_type == 'beta_eq':
@@ -1886,6 +1928,11 @@ def _compute_Qs_at_R(R, hadronic_table, params, sigma,
                 elif eq_type == 'fixed_yc':
                     idx = (i_nB, i_o, i_T)
                     gv = {'T': T_arr[i_T], 'Y_C': outer_arr[i_o]}
+
+                R_val = float(R_full[idx])
+                # Rx = inf (T >= T_c): no CFL crossover, nothing to compute.
+                if not np.isfinite(R_val):
+                    continue
 
                 H_pt = _build_H_from_table(hadronic_table, eq_type, idx, gv)
 
@@ -1908,10 +1955,109 @@ def _compute_Qs_at_R(R, hadronic_table, params, sigma,
                     row_conv += 1
 
             if verbose:
-                print(f"  Q* at R={R_val:.2f}: T={T_arr[i_T]:.1f} "
+                print(f"  Q* at R(T={T_arr[i_T]:.1f}) "
                       f"-> {row_conv}/{len(n_B_arr)} converged")
 
-    return data
+    table = QstarTableData(eq_type=eq_type, hadronic_grids=grid_out, data=data)
+
+    if save_table:
+        if output_file is None:
+            output_file = f"Qstar_atR_{eq_type}.dat"
+        export_table(table, params, output_file,
+                     charge_neutrality='global', sigma=sigma)
+
+    return table
+
+
+# =============================================================================
+# unpCFL: Q* swept over R at a single hadronic point (for plotting W(R))
+# =============================================================================
+def compute_Qs_along_R(H_point, R_vec, params, sigma,
+                       quark_phase='unpaired', Delta0=None,
+                       include_photons=True, include_gluons=True,
+                       include_thermal_neutrinos=True,
+                       initial_guess=None):
+    """Compute coulomb_minimize Q* as a function of R at one hadronic point.
+
+    Companion to :func:`_compute_Qs_at_R`: that one fixes R and sweeps the
+    hadronic grid (``R[nBH, T]``); this one fixes the hadronic point and
+    sweeps R (``Rvec`` at a single ``nBH, T``). Intended for plotting the
+    barrier ``W(R)`` of the coulomb_minimize Q*.
+
+    Parameters
+    ----------
+    H_point : namespace
+        Single hadronic state with attributes required by the at-R solver
+        (T, Y_C, Y_S, Y_e, Y_nu, mu_B, mu_C, mu_S, mu_e, mu_nu, P_total).
+        Build one with ``_build_H_from_table(table, eq_type, idx, gv)``.
+    R_vec : array_like
+        Droplet radii (fm). Non-finite entries yield NaN / converged=False.
+    params : AlphaBagParams
+    sigma : float
+        Surface tension (MeV/fm^2).
+    quark_phase : str
+        'unpaired' or 'cfl'.
+    Delta0 : float or None
+        CFL pairing gap. Required if quark_phase='cfl'.
+
+    Returns
+    -------
+    dict
+        Per-R arrays (shape == R_vec.shape) with the ``_BASE_DATA_KEYS``
+        Q* quantities plus ``R``, ``converged``, and the derived
+        ``delta_n_C``, ``Delta_f`` and ``W`` (the barrier W(R)).
+    """
+    from nucleation.energy_barrier.small_droplet.table import _BASE_DATA_KEYS
+
+    solver_kw = dict(include_photons=include_photons,
+                     include_gluons=include_gluons,
+                     include_thermal_neutrinos=include_thermal_neutrinos)
+
+    R_vec = np.atleast_1d(np.asarray(R_vec, dtype=float))
+    n = R_vec.size
+    out = {k: np.full(n, np.nan) for k in _BASE_DATA_KEYS}
+    out['converged'] = np.zeros(n, dtype=bool)
+    out['R'] = R_vec.copy()
+    out['delta_n_C'] = np.full(n, np.nan)
+    out['Delta_f'] = np.full(n, np.nan)
+    out['W'] = np.full(n, np.nan)
+
+    guess = initial_guess
+    for k in range(n):
+        R_val = float(R_vec[k])
+        if not np.isfinite(R_val):
+            continue
+
+        if quark_phase == 'cfl':
+            result = solve_saddlepoint_minimizecoulomb_cfl_at_R(
+                R_val, H_point, params, Delta0, sigma, **solver_kw,
+                initial_guess=guess)
+        else:
+            result = solve_saddlepoint_minimizecoulomb_at_R(
+                R_val, H_point, params, sigma, **solver_kw,
+                initial_guess=guess)
+
+        if result is None:
+            continue
+
+        for key in _BASE_DATA_KEYS:
+            out[key][k] = getattr(result, key)
+        out['converged'][k] = True
+        guess = np.array([result.mu_u, result.mu_d, result.mu_s, result.mu_e])
+
+        Qs_pt = SimpleNamespace(
+            P_total=result.P_total, n_B=result.n_B,
+            mu_B=result.mu_B, mu_C=result.mu_C, mu_S=result.mu_S,
+            mu_e=result.mu_e, mu_nu=H_point.mu_nu,
+            Y_C=result.Y_C, Y_S=result.Y_S, Y_e=result.Y_e, Y_nu=H_point.Y_nu,
+        )
+        delta_n_C = (result.Y_C - result.Y_e) * result.n_B
+        Delta_f = driving_force(Qs_pt, H_point)
+        out['delta_n_C'][k] = delta_n_C
+        out['Delta_f'][k] = Delta_f
+        out['W'][k] = work_of_formation(R_val, Delta_f, sigma, delta_n_C)
+
+    return out
 
 
 # =============================================================================
@@ -1941,6 +2087,8 @@ def _compute_thermal_nucleation_unpCFL(
     verbose,
     save_table,
     output_file,
+    Qstar_table_unp_atRx=None,
+    R_gcn_skip=None,
 ):
     """Compute thermal nucleation observables for the unpCFL quark phase.
 
@@ -1975,6 +2123,7 @@ def _compute_thermal_nucleation_unpCFL(
             params=params_unp,
             quark_phase='unpaired',
             sigma=sigma,
+            R_gcn_skip=R_gcn_skip,
             **common_table_kw,
         )
 
@@ -1992,16 +2141,22 @@ def _compute_thermal_nucleation_unpCFL(
             quark_phase='cfl',
             Delta0=Delta0,
             sigma=sigma,
+            R_gcn_skip=R_gcn_skip,
             **common_table_kw,
         )
 
     # ---- Step 1b: Q* at R=Rx for coulomb_minimize ----
+    # Rx may be a scalar, a per-T array (Rx = hc/Delta(T)), or a full grid;
+    # _compute_Qs_at_R broadcasts it and skips Rx=inf columns (T >= T_c).
     if electric_charge_mode == 'coulomb_minimize':
-        if verbose:
-            print("Computing unpaired Q* at R=Rx...")
-        q_d_unp_atRx = _compute_Qs_at_R(#####put in table... needs vec R[nBH,T,..]
-            Rx, hadronic_table, params_unp, sigma,
-            quark_phase='unpaired', **common_table_kw)
+        if Qstar_table_unp_atRx is not None:
+            q_d_unp_atRx = Qstar_table_unp_atRx.data
+        else:
+            if verbose:
+                print("Computing unpaired Q* at R=Rx...")
+            q_d_unp_atRx = _compute_Qs_at_R(
+                Rx, hadronic_table, params_unp, sigma,
+                quark_phase='unpaired', **common_table_kw).data
     else:
         q_d_unp_atRx = None
 
@@ -2131,8 +2286,8 @@ def _compute_thermal_nucleation_unpCFL(
         e_unp = np.where(at_kink, Qs_unp_atRx.e_total, e_unp)
 
     Qs_mixed = SimpleNamespace(
-        P_total=(1 - S_at_Rc) * P_unp + S_at_Rc * Qs_cfl.P_total,
-        e_total=(1 - S_at_Rc) * e_unp + S_at_Rc * Qs_cfl.e_total,
+        P_total=_blend_phase(S_at_Rc, P_unp, Qs_cfl.P_total),
+        e_total=_blend_phase(S_at_Rc, e_unp, Qs_cfl.e_total),
     )
 
     Gamma = nucleation_rate(W_c, R_c, sigma, H.T, H, Qs_mixed,

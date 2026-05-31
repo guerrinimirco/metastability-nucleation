@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Read(//Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/eos/tov/**)",
+      "Bash(python3)"
+    ]
+  }
+}

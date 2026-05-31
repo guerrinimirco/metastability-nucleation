@@ -33,6 +33,15 @@ from nucleation.energy_barrier.small_droplet.barrier import (
 )
 
 
+# Default cutoff (fm) on the GCN critical radius above which the full
+# coulomb_minimize solve is treated as hopeless: the Coulomb term grows as
+# R^5 * delta_n_C^2, so for large R_c_gcn there is usually no dW/dR=0 root and
+# the expensive fallback chain (LCN re-solve + extra robust_root) almost always
+# fails. Above this cutoff we make a single quick attempt and bail. np.inf
+# disables the heuristic (no points skipped). See solve_saddlepoint_minimizecoulomb.
+R_GCN_SKIP_DEFAULT = np.inf
+
+
 # =============================================================================
 # Shared utilities
 # =============================================================================
@@ -254,7 +263,8 @@ def solve_saddlepoint_cfl(H, params, Delta0, charge_neutrality,
 # =============================================================================
 def solve_saddlepoint_minimizecoulomb(H, params, sigma,
                   include_photons, include_gluons,
-                  include_thermal_neutrinos, initial_guess=None):
+                  include_thermal_neutrinos, initial_guess=None,
+                  R_gcn_skip=R_GCN_SKIP_DEFAULT):
     """Solve for Q* and R* with Coulomb corrections.
 
     5 unknowns: [mu_u, mu_d, mu_s, mu_e, R]
@@ -264,6 +274,11 @@ def solve_saddlepoint_minimizecoulomb(H, params, sigma,
       3. mu_S_Qs = mu_S_H                         (dW/dY_S = 0)
       4. mu_e = mu_e_H + coulomb_delta_mu_e        (Coulomb GCN)
       5. P_Qs - P_H - 2sigma/R + dP_Coulomb = 0   (dW/dR = 0)
+
+    ``R_gcn_skip`` (fm): when the GCN critical radius exceeds this cutoff the
+    full Coulomb root almost never exists, so only a single quick attempt is
+    made (the expensive LCN-refinement fallback is skipped). Default np.inf
+    keeps the original behaviour.
 
     Returns (AlphaBagEOSResult, R_c) or None.
     """
@@ -308,30 +323,37 @@ def solve_saddlepoint_minimizecoulomb(H, params, sigma,
     guess_gcn = np.array([mu_u_gcn, mu_d_gcn, mu_s_gcn, result_gcn.mu_e, R_c_gcn])
     h_guess = guess_gcn
 
-    # First attempt
     guess = initial_guess if initial_guess is not None else guess_gcn
-    sol = robust_root(equations, guess, h_guess)
 
-    # If failed, refine R guess using LCN
-    if sol is None:
-        result_lcn = solve_saddlepoint(H, params, charge_neutrality='local', include_photons=include_photons, include_gluons=include_gluons,
-                     include_thermal_neutrinos=include_thermal_neutrinos)
-        if result_lcn is not None and driving_force(result_lcn, H) < 0:
-            R_c_lcn = 2.0 * sigma / (result_lcn.P_total - H.P_total)
-            mu_d_lcn = result_lcn.mu_d
-            mu_u_lcn = result_lcn.mu_u
-            mu_s_lcn = result_lcn.mu_s
-            R_mid = (R_c_gcn + R_c_lcn) / 2.0
-            guess_mid = np.array([(mu_u_gcn+mu_u_lcn)/2.0, (mu_d_gcn+mu_d_lcn)/2.0, (mu_s_gcn+mu_s_lcn)/2.0, (result_gcn.mu_e+result_lcn.mu_e)/2.0, R_mid])
-        else:
-            R_mid = (R_c_gcn + 200.0) / 2.0
-            guess_mid = np.array([mu_u_gcn, mu_d_gcn, mu_s_gcn, result_gcn.mu_e, R_mid])
+    if R_c_gcn > R_gcn_skip:
+        # Hopeless region (large R_c_gcn): one quick attempt, no fallbacks.
+        sol = root(equations, guess, method='hybr')
+        if np.max(np.abs(sol.fun)) >= 1e-8:
+            return None
+    else:
+        # First attempt
+        sol = robust_root(equations, guess, h_guess)
 
-        h_guess_mid = np.append(hadronic_guess(H), R_mid)
-        sol = robust_root(equations, guess_mid, h_guess_mid)
+        # If failed, refine R guess using LCN
+        if sol is None:
+            result_lcn = solve_saddlepoint(H, params, charge_neutrality='local', include_photons=include_photons, include_gluons=include_gluons,
+                         include_thermal_neutrinos=include_thermal_neutrinos)
+            if result_lcn is not None and driving_force(result_lcn, H) < 0:
+                R_c_lcn = 2.0 * sigma / (result_lcn.P_total - H.P_total)
+                mu_d_lcn = result_lcn.mu_d
+                mu_u_lcn = result_lcn.mu_u
+                mu_s_lcn = result_lcn.mu_s
+                R_mid = (R_c_gcn + R_c_lcn) / 2.0
+                guess_mid = np.array([(mu_u_gcn+mu_u_lcn)/2.0, (mu_d_gcn+mu_d_lcn)/2.0, (mu_s_gcn+mu_s_lcn)/2.0, (result_gcn.mu_e+result_lcn.mu_e)/2.0, R_mid])
+            else:
+                R_mid = (R_c_gcn + 200.0) / 2.0
+                guess_mid = np.array([mu_u_gcn, mu_d_gcn, mu_s_gcn, result_gcn.mu_e, R_mid])
 
-    if sol is None:
-        return None
+            h_guess_mid = np.append(hadronic_guess(H), R_mid)
+            sol = robust_root(equations, guess_mid, h_guess_mid)
+
+        if sol is None:
+            return None
 
     mu_u, mu_d, mu_s, mu_e, R_c = sol.x
 
@@ -403,7 +425,8 @@ def solve_saddlepoint_minimizecoulomb_at_R(R, H, params, sigma,
 # =============================================================================
 def solve_saddlepoint_minimizecoulomb_cfl(H, params, Delta0, sigma,
                       include_photons, include_gluons,
-                      include_thermal_neutrinos, initial_guess=None):
+                      include_thermal_neutrinos, initial_guess=None,
+                      R_gcn_skip=R_GCN_SKIP_DEFAULT):
     """Solve for CFL Q* and R* with Coulomb corrections.
 
     5 unknowns: [mu_u, mu_d, mu_s, mu_e, R]
@@ -413,6 +436,10 @@ def solve_saddlepoint_minimizecoulomb_cfl(H, params, Delta0, sigma,
       3. mu_e = mu_e_H + coulomb_delta_mu_e        (Coulomb GCN)
       4. mu_B_Qs = mu_B_H                          (dW/dn_B = 0)
       5. P_Qs - P_H - 2sigma/R + dP_Coulomb = 0   (dW/dR = 0)
+
+    ``R_gcn_skip`` (fm): cutoff on the GCN critical radius above which only a
+    single quick attempt is made (the LCN-refinement fallback is skipped).
+    Default np.inf keeps the original behaviour.
 
     Returns (CFLEOSResult, R_c) or None.
     """
@@ -453,28 +480,35 @@ def solve_saddlepoint_minimizecoulomb_cfl(H, params, Delta0, sigma,
                           result_gcn.mu_e, R_c_gcn])
     h_guess = guess_gcn
 
-    # First attempt
     guess = initial_guess if initial_guess is not None else guess_gcn
-    sol = robust_root(equations, guess, h_guess)
 
-    # If failed, refine R guess using LCN
-    if sol is None:
-        result_lcn = solve_saddlepoint_cfl(H, params, Delta0, charge_neutrality='local',
-                         include_photons=include_photons, include_gluons=include_gluons,
-                         include_thermal_neutrinos=include_thermal_neutrinos)
-        if result_lcn is not None and result_lcn.P_total > H.P_total:
-            R_c_lcn = 2.0 * sigma / (result_lcn.P_total - H.P_total)
-            R_mid = (R_c_gcn + R_c_lcn) / 2.0
-        else:
-            R_mid = (R_c_gcn + 200.0) / 2.0
+    if R_c_gcn > R_gcn_skip:
+        # Hopeless region (large R_c_gcn): one quick attempt, no fallbacks.
+        sol = root(equations, guess, method='hybr')
+        if np.max(np.abs(sol.fun)) >= 1e-8:
+            return None
+    else:
+        # First attempt
+        sol = robust_root(equations, guess, h_guess)
 
-        guess_mid = np.array([result_gcn.mu_u, result_gcn.mu_d, result_gcn.mu_s,
-                              result_gcn.mu_e, R_mid])
-        h_guess_mid = np.append(hadronic_guess(H), R_mid)
-        sol = robust_root(equations, guess_mid, h_guess_mid)
+        # If failed, refine R guess using LCN
+        if sol is None:
+            result_lcn = solve_saddlepoint_cfl(H, params, Delta0, charge_neutrality='local',
+                             include_photons=include_photons, include_gluons=include_gluons,
+                             include_thermal_neutrinos=include_thermal_neutrinos)
+            if result_lcn is not None and result_lcn.P_total > H.P_total:
+                R_c_lcn = 2.0 * sigma / (result_lcn.P_total - H.P_total)
+                R_mid = (R_c_gcn + R_c_lcn) / 2.0
+            else:
+                R_mid = (R_c_gcn + 200.0) / 2.0
 
-    if sol is None:
-        return None
+            guess_mid = np.array([result_gcn.mu_u, result_gcn.mu_d, result_gcn.mu_s,
+                                  result_gcn.mu_e, R_mid])
+            h_guess_mid = np.append(hadronic_guess(H), R_mid)
+            sol = robust_root(equations, guess_mid, h_guess_mid)
+
+        if sol is None:
+            return None
 
     mu_u, mu_d, mu_s, mu_e, R_c = sol.x
 
@@ -547,7 +581,8 @@ def solve_saddlepoint_minimizecoulomb_cfl_at_R(R, H, params, Delta0, sigma,
 def get_solver_Qs(flavor_mode, electric_charge_mode, params,
                     quark_phase='unpaired', Delta0=None, sigma=None,
                     include_photons=True, include_gluons=True,
-                    include_thermal_neutrinos=True):
+                    include_thermal_neutrinos=True,
+                    R_gcn_skip=R_GCN_SKIP_DEFAULT):
     """Return a solver callable with signature solver(H, initial_guess=None).
 
     Maps (flavor_mode, electric_charge_mode, quark_phase) to the appropriate
@@ -569,6 +604,9 @@ def get_solver_Qs(flavor_mode, electric_charge_mode, params,
         Surface tension (MeV/fm^2). Required for 'coulomb_minimize'.
     include_photons, include_gluons, include_thermal_neutrinos : bool
         Default True.
+    R_gcn_skip : float
+        GCN-critical-radius cutoff for the coulomb_minimize fast path (fm).
+        Only used for electric_charge_mode='coulomb_minimize'. Default np.inf.
 
     Returns
     -------
@@ -627,9 +665,11 @@ def get_solver_Qs(flavor_mode, electric_charge_mode, params,
     if quark_phase == 'cfl':
         def solver(H, initial_guess=None):
             return solve_saddlepoint_minimizecoulomb_cfl(H, params, Delta0, sigma,
-                                                         **common_kw, initial_guess=initial_guess)
+                                                         **common_kw, initial_guess=initial_guess,
+                                                         R_gcn_skip=R_gcn_skip)
     else:
         def solver(H, initial_guess=None):
             return solve_saddlepoint_minimizecoulomb(H, params, sigma, **common_kw,
-                                                     initial_guess=initial_guess)
+                                                     initial_guess=initial_guess,
+                                                     R_gcn_skip=R_gcn_skip)
     return solver

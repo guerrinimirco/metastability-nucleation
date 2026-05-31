@@ -198,7 +198,8 @@ def compute_Qstar_table(hadronic_table,
                         initial_guess=None, verbose=False,
                         save_table=False, output_file=None,
                         include_photons=True, include_gluons=True,
-                        include_thermal_neutrinos=True):
+                        include_thermal_neutrinos=True,
+                        R_gcn_skip=None):
     """Compute Q* table over the hadronic grid for any eq_type.
 
     Usage::
@@ -234,12 +235,21 @@ def compute_Qstar_table(hadronic_table,
         Output filepath. Defaults to 'Qstar_{eq_type}.dat'.
     include_photons, include_gluons, include_thermal_neutrinos : bool
         Default True.
+    R_gcn_skip : float or None
+        GCN-critical-radius cutoff (fm) for the coulomb_minimize fast path:
+        points with R_c_gcn above it skip the expensive solver fallbacks. None
+        uses the solver module default (np.inf, i.e. disabled). Only affects
+        electric_charge_mode='coulomb_minimize'.
 
     Returns
     -------
     QstarTableData
     """
-    from nucleation.energy_barrier.small_droplet.solvers import get_solver_Qs
+    from nucleation.energy_barrier.small_droplet.solvers import (
+        get_solver_Qs, R_GCN_SKIP_DEFAULT,
+    )
+    if R_gcn_skip is None:
+        R_gcn_skip = R_GCN_SKIP_DEFAULT
 
     solver_fn = get_solver_Qs(
         flavor_mode=flavor_mode,
@@ -251,6 +261,7 @@ def compute_Qstar_table(hadronic_table,
         include_photons=include_photons,
         include_gluons=include_gluons,
         include_thermal_neutrinos=include_thermal_neutrinos,
+        R_gcn_skip=R_gcn_skip,
     )
     include_coulomb = (electric_charge_mode == 'coulomb_minimize')
 
