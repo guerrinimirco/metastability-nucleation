@@ -1541,12 +1541,18 @@ def build_thermal_nucleation_interpolators(nucleation_obs, method='linear'):
             bounds_error=False, fill_value=np.nan)
         result[name] = (lambda f: lambda *a: float(f(a)))(interp)
 
-    # log10(tau) interpolator (often more useful than tau directly)
+    # log10(tau) interpolator (often more useful than tau directly).
+    # RegularGridInterpolator(method='cubic') solves a global spline system
+    # that rejects non-finite values, and sentinel-filling the NaNs would
+    # corrupt that fit. So use cubic only when the grid is fully finite
+    # (dense / all-converged), and fall back to the NaN-tolerant linear method
+    # when non-converged points are present (e.g. sparse unpCFL tables).
     with np.errstate(divide='ignore', invalid='ignore'):
         log_tau = np.log10(nucleation_obs.tau)
     log_tau = np.clip(log_tau, -50, 100)
+    log_tau_method = 'cubic' if np.all(np.isfinite(log_tau)) else 'linear'
     interp_log = RegularGridInterpolator(
-        grid_tuple, log_tau, method='cubic',
+        grid_tuple, log_tau, method=log_tau_method,
         bounds_error=False, fill_value=np.nan)
     result['log10_tau'] = (lambda f: lambda *a: float(f(a)))(interp_log)
 
@@ -2434,10 +2440,17 @@ def _compute_thermal_nucleation_unpCFL(
         S_at_Rc = S_func(R_c)
 
 
-    P_unp = Qs_unp.P_total
-    e_unp = Qs_unp.e_total
+    # Kink mask: the barrier peak sits at the crossover R_c = Rx (step
+    # switching), where the unpaired side is taken from the at-Rx Q* rather
+    # than the full-solve unpaired table.
     if Qs_unp_atRx is not None:
         at_kink = np.isclose(R_c, Rx) & (S_at_Rc < 0.5)
+    else:
+        at_kink = None
+
+    P_unp = Qs_unp.P_total
+    e_unp = Qs_unp.e_total
+    if at_kink is not None:
         P_unp = np.where(at_kink, Qs_unp_atRx.P_total, P_unp)
         e_unp = np.where(at_kink, Qs_unp_atRx.e_total, e_unp)
 
@@ -2451,7 +2464,19 @@ def _compute_thermal_nucleation_unpCFL(
     tau = nucleation_time(Gamma, V)
 
     # ---- Step 7: Build result ----
-    converged = q_d_unp['converged'] & q_d_cfl['converged']
+    # Convergence reflects the phase actually *selected* at R_c, not the AND of
+    # both phases. For step switching only one phase sets the barrier peak, so
+    # demanding both would mask valid points where the unused sibling solve
+    # failed (e.g. the unpaired full coulomb-minimize solve dies at low T while
+    # the peak sits at the kink, computed from the converged at-Rx Q*).
+    if switching_mode == 'step':
+        converged = np.where(S_at_Rc < 0.5,
+                             q_d_unp['converged'], q_d_cfl['converged'])
+        if at_kink is not None:
+            converged = np.where(at_kink,
+                                 q_d_unp_atRx['converged'], converged)
+    else:
+        converged = q_d_unp['converged'] & q_d_cfl['converged']
     nuc_converged = (converged & np.isfinite(R_c) & np.isfinite(W_c) & (R_c > 0))
 
     result = ThermalNucleationObservables(
