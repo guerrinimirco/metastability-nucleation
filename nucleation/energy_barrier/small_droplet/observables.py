@@ -1921,20 +1921,54 @@ def _find_Rc_Wc_step(R_c_unp, R_c_cfl, Rx, S_func,
                      Delta_f_unp_atRx=None, delta_n_C_unp_atRx=None):
     """Critical radius and barrier height for step switching.
 
-    R_c = R_c_unp             if R_c_unp <= Rx  (and R_c_unp is finite)
-    R_c = max(Rx, R_c_cfl)    otherwise
+    Below the crossover (R_c_unp <= Rx) the droplet is smaller than the CFL
+    coherence length and is forced unpaired:
+        R_c = R_c_unp,  phase = unpaired.
 
-    When R_c = Rx (kink) and ``Delta_f_unp_atRx`` is provided
-    (coulomb_minimize mode), uses Delta_f evaluated at R = Rx instead
-    of the table value (which was evaluated at a different R_c).
+    Above the crossover the interior takes the *more stable* phase, i.e. the
+    one with the more negative Delta_f (higher pressure) -- equivalently the
+    one with the smaller CNT radius R_c = 2 sigma / |Delta_f|.  So the
+    upper-branch critical radius is min(R_c_cfl, R_c_unp):
+        R_c = min(R_c_cfl, R_c_unp)   if that exceeds Rx,  phase = whichever won.
 
-    W_c = work_of_formation(R_c, blended Delta_f, sigma, blended delta_n_C)
+    When the stable-phase radius falls below Rx, the unpaired branch is still
+    rising at the crossover while the upper branch has already turned over, so
+    the barrier peak is pinned at the kink R_c = Rx.  There the unpaired side
+    sets the peak (it is continuous from below, and is the *higher* barrier
+    because the more-stable upper phase has the lower W); phase = unpaired, and
+    -- in coulomb_minimize mode -- Delta_f is taken from the at-Rx Q* via
+    ``Delta_f_unp_atRx``.
+
+    This reduces exactly to the old "CFL always wins above Rx" rule in the
+    cold / strong-gap limit, where R_c_cfl < R_c_unp everywhere; at finite T,
+    where the shrinking gap can make unpaired the stable phase above Rx, the
+    barrier correctly switches back to unpaired.
+
+    # ponytail: no Delta_f_cfl_atRx -- a CFL phase pinned exactly at Rx would
+    # use the full-solve Delta_f_cfl (at R_c_cfl != Rx).  The physics rules this
+    # out: the pin is always the unpaired side, because the more-stable upper
+    # phase has the lower barrier at Rx.  Add only if a real case violates it.
+
+    W_c = work_of_formation(R_c, phase Delta_f, sigma, phase delta_n_C)
     """
     unp_exists = np.isfinite(R_c_unp)
-    R_c = np.where(unp_exists & (R_c_unp <= Rx),
-                   R_c_unp,
-                   np.maximum(Rx, R_c_cfl))
-    S_at_Rc = S_func(R_c)
+    cfl_exists = np.isfinite(R_c_cfl)
+
+    below = unp_exists & (R_c_unp <= Rx)                 # forced-unpaired branch
+
+    # Stable upper phase = smaller critical radius (larger |Delta_f|, higher P).
+    R_c_stable = np.fmin(R_c_cfl, R_c_unp)               # NaN-skipping min
+    cfl_is_stable = cfl_exists & (~unp_exists | (R_c_cfl <= R_c_unp))
+
+    # Peak on the stable phase above Rx; else pinned at the kink (unpaired side)
+    # when the unpaired branch is still rising through the crossover.
+    upper_branch = (~below) & (R_c_stable > Rx)
+    pinned = unp_exists & (R_c_unp > Rx) & ~(R_c_stable > Rx)
+
+    R_c = np.where(below, R_c_unp,
+                   np.where(upper_branch, R_c_stable,
+                            np.where(pinned, Rx, np.nan)))
+    S_at_Rc = np.where(upper_branch & cfl_is_stable, 1.0, 0.0)
 
     # At kink (R_c = Rx, S=0): use Delta_f at Rx if available
     if Delta_f_unp_atRx is not None:
