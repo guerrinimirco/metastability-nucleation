@@ -30,7 +30,7 @@ from scipy.interpolate import interp1d
 from scipy.optimize import brentq
 
 from eos.alphabag.parameters import get_alphabag_custom
-from eos.alphabag.eos import solve_cfl
+from eos.alphabag.eos import solve_cfl, solve_alphabag_fixed_yc_ys
 from eos.general.physics_constants import hc
 from eos.tov.solver import (EOSTable_for_TOV, generate_ec_logspace,
                             compute_tov_sequence, truncate_to_stable_branch)
@@ -50,7 +50,8 @@ except Exception:
 # Filter-reason -> integer code. The three filters short-circuit cheap->expensive,
 # so codes are *nested*: contouring this field at 1.5 / 2.5 gives the Witten /
 # no-rehadr pass edges, and 3.5 (== cfl_ok edge) the full-acceptance edge.
-REASON_CODE = {'solve': 0, 'witten': 1, 'rehadr': 2, 'mmax': 3, 'OK': 4}
+REASON_CODE = {'solve': 0, 'witten': 1, 'rehadr': 2, 'mmax': 3, 'OK': 4,
+               'twoflavor': 5}  # 2-flavor (ud) matter is bound -> nuclei unstable
 
 
 # =============================================================================
@@ -69,8 +70,12 @@ class FilterConfig:
     e_c_vec_tov: np.ndarray = field(
         default_factory=lambda: generate_ec_logspace(e_min=100, e_max=2000, n_points=80))
     M_max_window: tuple = (2.0, np.inf)
-    e_over_nB_max: float = 930.0
+    e_over_nB_max: float = 930.0          # 3-flavor SQM must be bound: e/nB|P=0 < this
     T_eos: float = 0.0
+    # 2-flavor (ud+e, charge-neutral, beta-eq) matter must NOT be bound, else ordinary
+    # nuclei would decay to it -> require e/nB|P=0 > e_over_nB_2flavor (Delta0-independent).
+    check_2flavor: bool = True
+    e_over_nB_2flavor: float = 930.0
 
 
 @dataclass
@@ -159,6 +164,52 @@ def zero_crossing(x, y):
         return None
     j = idx[0]
     return j, -y[j] / (y[j + 1] - y[j])
+
+
+def ud_eps_per_nB(alpha, B4, cfg: FilterConfig):
+    """eps/n_B [MeV] at P=0 for cold, charge-neutral, beta-equilibrated 2-flavor
+    (ud+e, Y_S=0) unpaired matter -- the 'is 2-flavor matter bound?' line. np.nan
+    if no P=0 crossing. INDEPENDENT of Delta0 and m_s (no strange quarks). The SQM
+    hypothesis needs this ABOVE ~930 MeV so ordinary (ud) nuclei do not decay to
+    quark matter -- the companion to the 3-flavor Witten bound."""
+    p = get_alphabag_custom(alpha=alpha, B4=B4, m_s=cfg.m_s)
+    n = cfg.n_B_grid
+    P = np.full_like(n, np.nan)
+    e = np.full_like(n, np.nan)
+
+    def solve(nB, yc, guess):
+        return solve_alphabag_fixed_yc_ys(nB, yc, 0.0, cfg.T_eos, p,
+                                          include_photons=False, include_gluons=True,
+                                          include_electrons=True, initial_guess=guess)
+
+    guess = None
+    for i, nB in enumerate(n):
+        # beta-eq quark charge fraction Y_C: mu_d - mu_u - mu_e = 0 (electrons neutralise).
+        def g(yc, _nB=nB, _g=guess):
+            r = solve(_nB, yc, _g)
+            return r.mu_d - r.mu_u - r.mu_e
+        try:
+            if g(1e-4) * g(0.34) > 0:      # no beta-eq root bracketed at this density
+                continue
+            yc = brentq(g, 1e-4, 0.34, xtol=1e-5)
+            r = solve(nB, yc, guess)
+        except Exception:
+            continue
+        if not r.converged or r.error > 1e-6:
+            continue
+        P[i], e[i] = r.P_total, r.e_total
+        guess = np.array([r.mu_u, r.mu_d, r.mu_s])   # warm-start the next density
+    ok = np.isfinite(P)
+    if ok.sum() < 5:
+        return np.nan
+    cr = zero_crossing(n[ok], P[ok])
+    if cr is None:
+        return np.nan
+    j, fr = cr
+    nn, ee = n[ok], e[ok]
+    nP0 = nn[j] + fr * (nn[j + 1] - nn[j])
+    eP0 = ee[j] + fr * (ee[j + 1] - ee[j])
+    return float(eP0 / nP0) if nP0 > 0 else np.nan
 
 
 def passes_cfl_filters(alpha, B4, Delta0, cfg: FilterConfig):
@@ -358,7 +409,8 @@ def _grid_key(alpha_slices, B4_grid, Delta0_grid, cfg: FilterConfig):
     return (tuple(np.round(np.atleast_1d(alpha_slices), 6)),
             tuple(np.round(np.asarray(B4_grid), 6)),
             tuple(np.round(np.asarray(Delta0_grid), 6)),
-            float(cfg.m_s), tuple(cfg.M_max_window), float(cfg.e_over_nB_max))
+            float(cfg.m_s), tuple(cfg.M_max_window), float(cfg.e_over_nB_max),
+            bool(cfg.check_2flavor), float(cfg.e_over_nB_2flavor))
 
 
 def scan_cfl_filters(alpha_slices, B4_grid, Delta0_grid, cfg: FilterConfig,
@@ -397,6 +449,25 @@ def scan_cfl_filters(alpha_slices, B4_grid, Delta0_grid, cfg: FilterConfig,
         cfl[ia, i, jx] = ok
         mm[ia, i, jx] = M_max
         rs[ia, i, jx] = REASON_CODE[reason]
+    n_2f = 0
+    if cfg.check_2flavor:
+        # 2-flavor (ud) stability: reject (alpha,B4) where ud matter is bound
+        # (e/nB|P=0 <= threshold) -> ordinary nuclei would decay. Delta0-independent,
+        # so one solve per (alpha,B4) column, broadcast across Delta0.
+        cols = [(ia, jx) for ia in range(NA) for jx in range(NB)]
+        if use_par:
+            from joblib import Parallel, delayed
+            ud = Parallel(n_jobs=n_jobs, verbose=0)(
+                delayed(ud_eps_per_nB)(alpha_slices[ia], B4_grid[jx], cfg)
+                for (ia, jx) in cols)
+        else:
+            ud = [ud_eps_per_nB(alpha_slices[ia], B4_grid[jx], cfg) for (ia, jx) in cols]
+        for (ia, jx), v in zip(cols, ud):
+            if np.isfinite(v) and v <= cfg.e_over_nB_2flavor:
+                bad = rs[ia, :, jx] == REASON_CODE['OK']   # only override passing cells
+                cfl[ia, bad, jx] = False
+                rs[ia, bad, jx] = REASON_CODE['twoflavor']
+                n_2f += int(bad.sum())
     if verbose:
         npass = int(cfl.sum())
         c = {n: int((rs == k).sum()) for n, k in REASON_CODE.items()}  # reason histogram
@@ -408,7 +479,9 @@ def scan_cfl_filters(alpha_slices, B4_grid, Delta0_grid, cfg: FilterConfig,
               f"    rejected -> no CFL solve: {c['solve']}, "
               f"Witten (unstable / e/nB>{cfg.e_over_nB_max:g}): {c['witten']}, "
               f"re-hadronizes (P_CFL<P_H): {c['rehadr']}, "
-              f"M_max outside {cfg.M_max_window}: {c['mmax']}", flush=True)
+              f"M_max outside {cfg.M_max_window}: {c['mmax']}, "
+              f"2-flavor bound (e/nB<={cfg.e_over_nB_2flavor:g}): {c['twoflavor']}",
+              flush=True)
     _filter_cache[key] = (cfl, mm, rs)
     return cfl, mm, rs
 
@@ -502,7 +575,6 @@ def plot_sigma_crit_grid(B4_grid, Delta0_grid, alpha_slices, sig_crit, cfl_ok,
     overlays. Pure function of the scan arrays -> use it to re-plot a reloaded npz."""
     import matplotlib.pyplot as plt
     from matplotlib.colors import ListedColormap
-    from matplotlib.lines import Line2D
     try:
         import pandas as pd
     except Exception:
@@ -537,19 +609,28 @@ def plot_sigma_crit_grid(B4_grid, Delta0_grid, alpha_slices, sig_crit, cfl_ok,
             ax.contour(B4_grid, Delta0_grid, ca.astype(float), levels=[0.5],
                        colors='k', linewidths=1.1, linestyles='--')
         if show_filter_lines:
-            for lev, col in [(1.5, 'tab:cyan'), (2.5, 'tab:pink')]:
+            # Witten / no-rehadronization pass edges, labelled inline (no legend).
+            for lev, name in [(1.5, 'Witten'), (2.5, 'rehadronization')]:
                 if (ra > lev).any() and (ra < lev).any():
-                    ax.contour(B4_grid, Delta0_grid, ra, levels=[lev],
-                               colors=col, linewidths=1.0, linestyles=':')
+                    cf = ax.contour(B4_grid, Delta0_grid, ra, levels=[lev],
+                                    colors='tab:blue', linewidths=1.1)
+                    ax.clabel(cf, fmt={lev: name}, fontsize=8, inline=True)
         if show_mmax_lines and np.isfinite(ma).any():
-            cs = ax.contour(B4_grid, Delta0_grid, ma, levels=[1.8, 2.2, 2.4, 2.6],
-                            colors='white', linewidths=0.9, alpha=0.9)
-            ax.clabel(cs, fmt='%.1f', fontsize=7, inline=True)
             win = sorted(lv for lv in mass_window if np.isfinite(lv))
+            wskip = {round(w, 1) for w in win}
+            # white iso-M_max guides every 0.2 Msun, from 1.8 up to whatever appears
+            # in the panel, skipping the red acceptance-window level(s).
+            wl = [round(x, 1) for x in np.arange(1.8, 4.0001, 0.2)
+                  if round(x, 1) not in wskip
+                  and np.nanmin(ma) <= round(x, 1) <= np.nanmax(ma)]
+            if wl:
+                cs = ax.contour(B4_grid, Delta0_grid, ma, levels=wl,
+                                colors='white', linewidths=0.9, alpha=0.9)
+                ax.clabel(cs, fmt=r'%.1f $M_\odot$', fontsize=7, inline=True)
             if win:
                 csw = ax.contour(B4_grid, Delta0_grid, ma, levels=win,
                                  colors='red', linewidths=1.6)
-                ax.clabel(csw, fmt='%.2f', fontsize=7, inline=True)
+                ax.clabel(csw, fmt=r'%.2f $M_\odot$', fontsize=7, inline=True)
         if show_sigcrit_lines and np.isfinite(sa).any():
             cc = ax.contour(B4_grid, Delta0_grid, sa, levels=6,
                             colors='k', linewidths=0.5, alpha=0.5)
@@ -564,6 +645,15 @@ def plot_sigma_crit_grid(B4_grid, Delta0_grid, alpha_slices, sig_crit, cfl_ok,
                 if ja == ia:
                     ax.scatter([p['B4']], [p['Delta0']], s=110, marker='*',
                                c='yellow', edgecolors='k', zorder=5)
+        # In-region text labels (replace the legend): centroid of each region's cells.
+        for mask, txt, col in [(ra == REASON_CODE['mmax'], r'$M_{\max}<2$', '0.2'),
+                               (ra == REASON_CODE['twoflavor'], '2-flavor\nbound', 'darkred'),
+                               (ca & ~np.isfinite(sa), 'no nucleation', 'saddlebrown')]:
+            if mask.any():
+                r_, c_ = np.where(mask)
+                ax.text(float(B4_grid[c_].mean()), float(Delta0_grid[r_].mean()),
+                        txt, color=col, fontsize=8, fontweight='bold',
+                        ha='center', va='center')
         ax.set_title(rf"$\alpha_s$={alpha:.2f}")
         ax.set_xlabel(r'$B^{1/4}$ [MeV]')
         ax.set_xlim(np.min(B4_grid), np.max(B4_grid))
@@ -572,21 +662,6 @@ def plot_sigma_crit_grid(B4_grid, Delta0_grid, alpha_slices, sig_crit, cfl_ok,
             ax.set_ylabel(r'$\Delta_0$ [MeV]')
 
     fig.colorbar(pcm, ax=axes.ravel().tolist(), label=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]')
-    handles = []
-    if show_split_grey:
-        handles += [Line2D([], [], marker='s', ls='', color='0.85', label='CFL rejected'),
-                    Line2D([], [], marker='s', ls='', color='#f4a261', label='CFL ok, no nucl.')]
-    if show_cfl_boundary:
-        handles.append(Line2D([], [], color='k', ls='--', label='CFL-pass edge'))
-    if show_filter_lines:
-        handles += [Line2D([], [], color='tab:cyan', ls=':', label='Witten edge'),
-                    Line2D([], [], color='tab:pink', ls=':', label='no-rehadr edge')]
-    if show_param_sets:
-        handles += [Line2D([], [], marker='*', ls='', color='yellow', mec='k', label='param sets'),
-                    Line2D([], [], marker='.', ls='', color='k', label='MC accepted')]
-    if handles:
-        fig.legend(handles=handles, loc='lower center', ncol=4, fontsize=7,
-                   bbox_to_anchor=(0.5, -0.05))
     fig.suptitle(rf"Acceptable region — {scan_label}{title_extra}", y=1.04)
     plt.show()
     return fig

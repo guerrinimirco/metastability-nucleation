@@ -1778,14 +1778,15 @@ else:
 # sigma_target_pt, passes_cfl_filters, replay_cfl, scan_cfl_filters,
 # compute_sigma_crit, plot_sigma_crit_grid, run_sigma_crit_scan.
 # =============================================================================
-_HAVE_JOBLIB = nuc_an._HAVE_JOBLIB    # used by the M-R replay cell's parallel loop
+import importlib.util
+_HAVE_JOBLIB = importlib.util.find_spec("joblib") is not None  # parallel M-R replay (optional)
 
 MT0_list = [1.0, 1.4]
 sig_lo, sig_hi = 1.0, 300.0
 # (label, flavor_mode, electric_charge_mode, quark_phase)
 _sig_methods = [
     ('frozen LCN unp',     'frozen',      'lcn',              'unpaired'),
-    ('saddle Cmin unp',    'saddlepoint', 'coulomb_minimize', 'unpaired'),
+   # ('saddle Cmin unp',    'saddlepoint', 'coulomb_minimize', 'unpaired'),
     ('saddle Cmin CFL',    'saddlepoint', 'coulomb_minimize', 'cfl'),
     ('saddle Cmin unpCFL', 'saddlepoint', 'coulomb_minimize', 'unpCFL'),
 ]
