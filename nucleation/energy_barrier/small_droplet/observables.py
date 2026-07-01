@@ -1939,49 +1939,66 @@ def _find_Rc_Wc_step(R_c_unp, R_c_cfl, Rx, S_func,
     -- in coulomb_minimize mode -- Delta_f is taken from the at-Rx Q* via
     ``Delta_f_unp_atRx``.
 
-    This reduces exactly to the old "CFL always wins above Rx" rule in the
-    cold / strong-gap limit, where R_c_cfl < R_c_unp everywhere; at finite T,
-    where the shrinking gap can make unpaired the stable phase above Rx, the
-    barrier correctly switches back to unpaired.
+    The nucleation barrier is the GLOBAL maximum of the piecewise W(R): the
+    unpaired branch on [0, Rx] and the more-stable branch on (Rx, inf). We form
+    the two candidate peaks explicitly and compare their HEIGHTS (not just their
+    radii), so a case where both critical radii exceed Rx but the upper-branch
+    peak is *lower* than the unpaired value at the kink correctly pins R_c = Rx
+    (unpaired). Comparing radii alone (the old rule) missed this and returned the
+    lower upper-branch peak -> it underestimated W_c and over-predicted the rate.
 
-    # ponytail: no Delta_f_cfl_atRx -- a CFL phase pinned exactly at Rx would
-    # use the full-solve Delta_f_cfl (at R_c_cfl != Rx).  The physics rules this
-    # out: the pin is always the unpaired side, because the more-stable upper
-    # phase has the lower barrier at Rx.  Add only if a real case violates it.
+    This reduces to "CFL wins above Rx" in the cold / strong-gap limit (where the
+    CFL peak is the highest barrier); at finite T, where the shrinking gap can
+    make unpaired the stable phase above Rx, it switches back to unpaired.
+
+    # ponytail: no Delta_f_cfl_atRx -- the above-region peak pinned at Rx would be
+    # the more-stable phase, whose W at Rx is <= the unpaired W at Rx, so it never
+    # wins the max; the kink is always the unpaired side. Add only if violated.
 
     W_c = work_of_formation(R_c, phase Delta_f, sigma, phase delta_n_C)
     """
     unp_exists = np.isfinite(R_c_unp)
     cfl_exists = np.isfinite(R_c_cfl)
 
-    below = unp_exists & (R_c_unp <= Rx)                 # forced-unpaired branch
+    # ---- below-region candidate: unpaired barrier on [0, Rx] ----------------
+    # Peak at R*_unp when it lies inside the region; otherwise (R*_unp > Rx, or no
+    # unpaired critical droplet at all) the barrier is still rising and the
+    # below-region peaks at the kink Rx.
+    unp_interior = unp_exists & (R_c_unp <= Rx)
+    R_below = np.where(unp_interior, R_c_unp, Rx)
+    if Delta_f_unp_atRx is not None:                     # coulomb_minimize: Df at the kink
+        at_kink = ~unp_interior
+        Df_u = np.where(at_kink, Delta_f_unp_atRx, Delta_f_unp)
+        dnC_u = np.where(at_kink, delta_n_C_unp_atRx, delta_n_C_unp)
+    else:
+        Df_u, dnC_u = Delta_f_unp, delta_n_C_unp
+    W_below = work_of_formation(R_below, Df_u, sigma, dnC_u)
+    W_below = np.where(np.isfinite(Df_u), W_below, np.nan)
 
-    # Stable upper phase = smaller critical radius (larger |Delta_f|, higher P).
+    # ---- above-region candidate: the MORE STABLE phase (smaller R_c) ---------
+    # Only a genuine peak when the stable-phase critical radius exceeds Rx; below
+    # Rx that branch is falling (peak would sit at Rx with W <= the unpaired kink
+    # value, so it never wins) -> mark invalid.
     R_c_stable = np.fmin(R_c_cfl, R_c_unp)               # NaN-skipping min
     cfl_is_stable = cfl_exists & (~unp_exists | (R_c_cfl <= R_c_unp))
+    above_valid = np.isfinite(R_c_stable) & (R_c_stable > Rx)
+    R_above = np.where(above_valid, R_c_stable, np.nan)
+    S_stable = np.where(cfl_is_stable, 1.0, 0.0)
+    Df_above = _blend_phase(S_stable, Delta_f_unp, Delta_f_cfl)
+    dnC_above = _blend_phase(S_stable, delta_n_C_unp, delta_n_C_cfl)
+    W_above = work_of_formation(R_above, Df_above, sigma, dnC_above)
+    W_above = np.where(above_valid, W_above, np.nan)
 
-    # Peak on the stable phase above Rx; else pinned at the kink (unpaired side)
-    # when the unpaired branch is still rising through the crossover.
-    upper_branch = (~below) & (R_c_stable > Rx)
-    pinned = unp_exists & (R_c_unp > Rx) & ~(R_c_stable > Rx)
-
-    R_c = np.where(below, R_c_unp,
-                   np.where(upper_branch, R_c_stable,
-                            np.where(pinned, Rx, np.nan)))
-    S_at_Rc = np.where(upper_branch & cfl_is_stable, 1.0, 0.0)
-
-    # At kink (R_c = Rx, S=0): use Delta_f at Rx if available
-    if Delta_f_unp_atRx is not None:
-        at_kink = np.isclose(R_c, Rx) & (S_at_Rc < 0.5)
-        Df_unp = np.where(at_kink, Delta_f_unp_atRx, Delta_f_unp)
-        dnC_unp = np.where(at_kink, delta_n_C_unp_atRx, delta_n_C_unp)
-    else:
-        Df_unp = Delta_f_unp
-        dnC_unp = delta_n_C_unp
-
-    Delta_f_at_Rc = _blend_phase(S_at_Rc, Df_unp, Delta_f_cfl)
-    delta_n_C_at_Rc = _blend_phase(S_at_Rc, dnC_unp, delta_n_C_cfl)
-    W_c = work_of_formation(R_c, Delta_f_at_Rc, sigma, delta_n_C_at_Rc)
+    # ---- global maximum of the piecewise barrier -----------------------------
+    Wb = np.where(np.isfinite(W_below), W_below, -np.inf)
+    Wa = np.where(np.isfinite(W_above), W_above, -np.inf)
+    above_wins = Wa > Wb
+    R_c = np.where(above_wins, R_above, R_below)
+    W_c = np.where(above_wins, W_above, W_below)
+    S_at_Rc = np.where(above_wins, S_stable, 0.0)        # below/kink is unpaired
+    valid = np.isfinite(W_below) | np.isfinite(W_above)
+    R_c = np.where(valid, R_c, np.nan)
+    W_c = np.where(valid, W_c, np.nan)
     return R_c, W_c, S_at_Rc
 
 

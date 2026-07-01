@@ -83,6 +83,7 @@ class NucConfig:
     """Nucleation / root-find setup for sigma_crit."""
     sig_lo: float = 1.0
     sig_hi: float = 300.0
+    n_sigma_scan: int = 40          # coarse sigma grid for the robust sigma_crit scan
     tau_target: float = 1e-3        # s
     V: float = 4.18879e51           # fm^3 (sphere R = 100 m)
     T_c_factor: float = 0.57        # CFL: T_c = T_c_factor * Delta0
@@ -341,14 +342,23 @@ def tau_pt(sigma, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc: 
     if phase == 'unpCFL':
         Qu, Rcu = _solve_phase(sigma, H_pt, flavor, charge, 'unpaired', cache, params, Delta0, nuc)
         Qc, Rcc = _solve_phase(sigma, H_pt, flavor, charge, 'cfl', cache, params, Delta0, nuc)
-        if Qu is None or Qc is None:
+        # The CFL core is required. The unpaired mantle may legitimately have NO
+        # critical droplet (its dW/dR=0 root undergoes a saddle-node above some
+        # sigma -> the coulomb_minimize solver returns None). That is not a
+        # failure of the unpCFL point: with R_c_unp = NaN the step combiner
+        # falls back to the CFL upper branch. So bail only if the CFL core fails.
+        if Qc is None:
             return np.nan
-        Dfu, Dfc = float(driving_force(Qu, H_pt)), float(driving_force(Qc, H_pt))
-        Rc_u = _Rc_single(Dfu, Rcu, sigma, charge)
+        Dfc = float(driving_force(Qc, H_pt))
         Rc_c = _Rc_single(Dfc, Rcc, sigma, charge)
-        Rx = float(crossover_radius(T_c, Delta0, nuc.T_c_factor))
-        dnC_u = (float(Qu.Y_C) - float(Qu.Y_e)) * float(Qu.n_B)
         dnC_c = (float(Qc.Y_C) - float(Qc.Y_e)) * float(Qc.n_B)
+        if Qu is not None:
+            Dfu = float(driving_force(Qu, H_pt))
+            Rc_u = _Rc_single(Dfu, Rcu, sigma, charge)
+            dnC_u = (float(Qu.Y_C) - float(Qu.Y_e)) * float(Qu.n_B)
+        else:                                   # no unpaired critical droplet
+            Dfu = Rc_u = dnC_u = np.nan
+        Rx = float(crossover_radius(T_c, Delta0, nuc.T_c_factor))
         R_c, W_c, S = _find_Rc_Wc_step(
             np.asarray(Rc_u, float), np.asarray(Rc_c, float), Rx,
             lambda R: switching_step(R, Rx),
@@ -358,6 +368,8 @@ def tau_pt(sigma, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc: 
         if not (np.isfinite(R_c) and R_c > 0 and np.isfinite(W_c) and W_c > 0):
             return np.nan
         Qs_sel = Qc if S > 0.5 else Qu
+        if Qs_sel is None:                      # unpaired peak selected but absent
+            return np.nan
         Gamma = float(nucleation_rate(W_c, R_c, sigma, T_c, H_pt, Qs_sel))
         return float(nucleation_time(Gamma, nuc.V)) if Gamma > 0 else np.inf
 
@@ -383,19 +395,64 @@ def tau_pt(sigma, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc: 
 
 
 def sigma_target_pt(H_pt, T_c, flavor, charge, phase, params, Delta0, nuc: NucConfig):
-    """sigma where tau(sigma) = nuc.tau_target at the centre, by brentq on
-    [nuc.sig_lo, nuc.sig_hi]. NaN if the crossing is not bracketed."""
+    """sigma where tau(sigma) = nuc.tau_target at the star centre.
+
+    Robust to solver drop-outs. tau(sigma) can be non-monotonic and can be NaN
+    over whole sigma sub-ranges where no critical droplet exists (e.g. the unpCFL
+    forced-unpaired-below-Rx window). A naive brentq on [sig_lo, sig_hi] treats
+    such a NaN edge as a tau=tau_target crossing and returns a spurious (tiny)
+    sigma_crit. Instead we scan a coarse sigma grid and locate the crossing ONLY
+    between adjacent CONVERGED (finite, positive tau) grid points, keeping the
+    largest-sigma upward crossing (the ultimate high-sigma suppression edge), then
+    brentq-refine on that sub-bracket.
+
+    Returns
+    -------
+    float
+      finite : sigma_crit (largest-sigma tau=tau_target crossing);
+      +inf   : tau < tau_target for EVERY converged sigma up to sig_hi
+               (nucleates for all tested sigma -> sigma_crit lies above sig_hi);
+      NaN    : no converged nucleating point (never reaches tau_target from below,
+               or no critical droplet anywhere in [sig_lo, sig_hi]).
+    """
     cache = {}
+    lo = np.log10(nuc.tau_target)
 
-    def g(s):
-        t = tau_pt(s, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc)
-        if not np.isfinite(t):
-            return 100.0 if (np.isnan(t) or t > nuc.tau_target) else -100.0
-        return np.log10(t) - np.log10(nuc.tau_target)
+    def tau(s):
+        return tau_pt(s, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc)
 
-    if g(nuc.sig_lo) * g(nuc.sig_hi) > 0:
-        return np.nan
-    return float(brentq(g, nuc.sig_lo, nuc.sig_hi, xtol=1e-3, rtol=1e-5))
+    sig = np.linspace(nuc.sig_lo, nuc.sig_hi, int(nuc.n_sigma_scan))
+    t = np.array([tau(s) for s in sig])
+    with np.errstate(divide='ignore', invalid='ignore'):
+        g = np.where(np.isfinite(t) & (t > 0), np.log10(t) - lo, np.nan)
+
+    # sigma_crit = largest sigma that still nucleates (tau <= tau_target), then look
+    # at what happens just above it. Using the LARGEST such sigma automatically steps
+    # over any lower-sigma drop-out gaps where no critical droplet exists (so those
+    # NaN edges are never mistaken for the threshold).
+    nuc_idx = np.where(np.isfinite(g) & (g < 0))[0]
+    if nuc_idx.size == 0:
+        return np.nan                                # never nucleates in [sig_lo, sig_hi]
+    i = int(nuc_idx.max())
+    if i == len(sig) - 1:
+        return np.inf                                # still nucleating at sig_hi
+    gj = g[i + 1]
+    if np.isfinite(gj) and gj >= 0:                  # converged upward crossing -> refine
+        try:
+            return float(brentq(lambda s: np.log10(tau(s)) - lo,
+                                 sig[i], sig[i + 1], xtol=1e-3, rtol=1e-5))
+        except (ValueError, FloatingPointError):
+            return float(sig[i] + (sig[i + 1] - sig[i]) * g[i] / (g[i] - gj))
+    # successor is NaN (no critical droplet) or tau=inf: nucleation stops between
+    # sig[i] and sig[i+1]. Refine the drop-out edge with a fine local sub-scan.
+    last = sig[i]
+    for s in np.linspace(sig[i], sig[i + 1], 12)[1:]:
+        ts = tau(s)
+        if np.isfinite(ts) and ts > 0 and (np.log10(ts) - lo) < 0:
+            last = float(s)
+        else:
+            break
+    return float(last)
 
 
 # =============================================================================
@@ -599,10 +656,16 @@ def plot_sigma_crit_grid(B4_grid, Delta0_grid, alpha_slices, sig_crit, cfl_ok,
         ax = axes[0, ia]
         sa, ca, ma, ra = sig_crit[ia], cfl_ok[ia], M_max[ia], reason[ia].astype(float)
         if show_split_grey:
-            cat = np.where(np.isfinite(sa), np.nan, np.where(ca, 1.0, 0.0))
+            # categorical background for the non-finite sigma_crit cells:
+            #   0 grey  = not CFL-viable
+            #   1 orange= CFL-viable but never nucleates in [sig_lo, sig_hi]  (NaN)
+            #   2 teal  = CFL-viable and nucleates for ALL tested sigma        (+inf,
+            #             i.e. sigma_crit lies above sig_hi -> most permissive)
+            cat = np.where(np.isfinite(sa), np.nan,
+                           np.where(~ca, 0.0, np.where(np.isposinf(sa), 2.0, 1.0)))
             ax.pcolormesh(B4_grid, Delta0_grid, np.ma.masked_invalid(cat),
-                          cmap=ListedColormap(['0.85', '#f4a261']),
-                          vmin=0, vmax=1, shading='nearest')
+                          cmap=ListedColormap(['0.85', '#f4a261', '#2a9d8f']),
+                          vmin=0, vmax=2, shading='nearest')
         pcm = ax.pcolormesh(B4_grid, Delta0_grid, np.ma.masked_invalid(sa),
                             cmap=cmap, vmin=vmin, vmax=vmax, shading='nearest')
         if show_cfl_boundary and ca.any() and (~ca).any():
@@ -648,7 +711,8 @@ def plot_sigma_crit_grid(B4_grid, Delta0_grid, alpha_slices, sig_crit, cfl_ok,
         # In-region text labels (replace the legend): centroid of each region's cells.
         for mask, txt, col in [(ra == REASON_CODE['mmax'], r'$M_{\max}<2$', '0.2'),
                                (ra == REASON_CODE['twoflavor'], '2-flavor\nbound', 'darkred'),
-                               (ca & ~np.isfinite(sa), 'no nucleation', 'saddlebrown')]:
+                               (ca & np.isnan(sa), 'no nucleation', 'saddlebrown'),
+                               (ca & np.isposinf(sa), r'$\sigma_{\rm c}>\sigma_{\rm hi}$', 'teal')]:
             if mask.any():
                 r_, c_ = np.where(mask)
                 ax.text(float(B4_grid[c_].mean()), float(Delta0_grid[r_].mean()),
