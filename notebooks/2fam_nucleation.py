@@ -1014,11 +1014,11 @@ quark_param_sets = [
     dict(alpha=0.1*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
     #dict(alpha=0.1*np.pi/2, B4=165.0, Delta0=180.0, m_s=100.0),
     #dict(alpha=0.1*np.pi/2, B4=170.0, Delta0=175.0, m_s=100.0),
-    dict(alpha=0.18*np.pi/2, B4=150.0, Delta0=126.0, m_s=100.0), # marginalized posterior
-    dict(alpha=0.08*np.pi/2, B4=158.0, Delta0=157.0, m_s=100.0), # maximum posterior
+    dict(alpha=0.18*np.pi/2, B4=150.0, Delta0=126.0, m_s=100.0), # marginalized posterior
+    dict(alpha=0.08*np.pi/2, B4=158.0, Delta0=157.0, m_s=100.0) # maximum posterior
 ]
 
-sigma_list = [50.0, 100.0, 150.0]      # surface tensions to scan [MeV/fm^2]
+sigma_list = [50.0, 100.0, 150.0, 200.0]      # surface tensions to scan [MeV/fm^2]
 
 def q_tag_of(p):
     """Unique filename/key tag for one parameter set."""
@@ -1251,7 +1251,7 @@ for p in quark_param_sets:
 # =============================================================================
 os.makedirs('../output/tables_Qstar', exist_ok=True)
 
-_bg_tab  = {'Hbetaeq': H_table['betaeq'], 'Htrapped': H_table['trapped']}
+_bg_tab  = {'Htrapped': H_table['trapped']}#'Hbetaeq': H_table['betaeq'], 
 _charges = ['lcn', 'gcn', 'coulomb_minimize']
 
 def qs_stem(stag, bg, charge, ph, sg):
@@ -1770,7 +1770,7 @@ YLH              = 0.25        # lepton fraction (must match a trapped-TOV file)
 S                = 2.0         # entropy per baryon (k_B)
 MT0              = 1.4         # T=0 beta-eq gravitational mass [M_sun]
 tau_sigma_target = 1e-3        # target nucleation timescale [s]
-
+V_nuc = 4.18879e51
 quark_phase          = 'unpCFL'      # 'unpaired' | 'cfl' | 'unpCFL'
 flavor_mode          = 'saddlepoint' # 'frozen' | 'saddlepoint'
 electric_charge_mode = 'coulomb_minimize'   # 'lcn' | 'gcn' | 'coulomb_minimize'
@@ -1780,7 +1780,7 @@ sigma_lo, sigma_hi = 1.0, 300.0      # sigma scan range (MeV/fm^2)
 # Quark parametrization: pick a set from quark_param_sets by index, OR set by
 # hand (use_set_index = None -> use the alpha_q/B4_q/Delta0_q/m_s_q below).
 use_set_index = 2
-alpha_q, B4_q, Delta0_q, m_s_q = 0.18*np.pi/2, 150.0, 126.0, 100.0
+#alpha_q, B4_q, Delta0_q, m_s_q = 0.08*np.pi/2, 158.0, 157.0, 100.0
 # -----------------------------------------------------------------------------
 
 if use_set_index is not None:
@@ -1872,7 +1872,7 @@ e_over_nB_max = 930.0          # MeV — Witten bound (energy/baryon of ^56 Fe)
 # (label, flavor_mode, electric_charge_mode, quark_phase)
 _sig_methods = [
     ('frozen LCN unp',     'frozen',      'lcn',              'unpaired'),
-   ('saddle Cmin unp',    'saddlepoint', 'coulomb_minimize', 'unpaired'),
+   #('saddle Cmin unp',    'saddlepoint', 'coulomb_minimize', 'unpaired'),
     ('saddle Cmin CFL',    'saddlepoint', 'coulomb_minimize', 'cfl'),
     ('saddle Cmin unpCFL', 'saddlepoint', 'coulomb_minimize', 'unpCFL'),
 ]

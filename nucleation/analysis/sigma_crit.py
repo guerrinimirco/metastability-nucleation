@@ -444,7 +444,16 @@ def sigma_target_pt(H_pt, T_c, flavor, charge, phase, params, Delta0, nuc: NucCo
         except (ValueError, FloatingPointError):
             return float(sig[i] + (sig[i + 1] - sig[i]) * g[i] / (g[i] - gj))
     # successor is NaN (no critical droplet) or tau=inf: nucleation stops between
-    # sig[i] and sig[i+1]. Refine the drop-out edge with a fine local sub-scan.
+    # sig[i] and sig[i+1]. But this is only a *physical* sigma_crit if tau was
+    # genuinely approaching tau_target at sig[i]. In the re-hadronization boundary
+    # band the only "nucleating" points are a barrierless island (W_c~=0, tau ~
+    # 1e-70 s, i.e. spinodal, not thermal nucleation) that then vanishes: there is
+    # no tau=tau_target threshold at all. Flag those as NaN rather than emit a fake
+    # low sigma_crit painted as "easy to nucleate".
+    # ponytail: -6 = tau within 1e6 of target; raise/lower if boundary cells shift.
+    if g[i] < -6.0:
+        return np.nan
+    # Refine the drop-out edge with a fine local sub-scan.
     last = sig[i]
     for s in np.linspace(sig[i], sig[i + 1], 12)[1:]:
         ts = tau(s)
