@@ -495,25 +495,45 @@ fig.tight_layout(); plt.show()
 # %% [markdown]
 # ## Filters
 #
-# We sample $(\alpha_s, \Delta_0, B^{1/4})$ uniformly in physically motivated boxes
-# and keep only those parameter sets passing **three filters in sequence**:
+# **Physics — the strange-quark-matter (SQM) hypothesis.** We are testing the
+# Bodmer–Witten idea that 3-flavour / colour-flavour-locked (CFL) quark matter is
+# the true ground state of cold dense matter. We sample $(\alpha_s, \Delta_0,
+# B^{1/4})$ uniformly in physically motivated boxes ($m_s$ fixed) and keep only sets
+# that are simultaneously self-consistent with that hypothesis *and* with
+# observation. The constraints below bracket the allowed region from every side.
 #
-# **(1) Witten's conjecture** — for absolutely-stable quark matter we need
-# $$\left.\frac{\varepsilon}{n_B}\right|_{P=0,\,T=0} \;<\; 930~\text{MeV}$$
-# (the energy/baryon of $^{56}$Fe).
+# **(1) Witten bound — 3-flavour SQM is bound.** For CFL matter to be absolutely
+# stable, its energy per baryon at zero pressure must lie *below* that of $^{56}$Fe:
+# $$\left.\frac{\varepsilon}{n_B}\right|_{P=0,\,T=0} \;<\; 930~\text{MeV}.$$
 #
-# **(2) No re-hadronization** — if the deconfined CFL phase has higher pressure
-# than the hadronic phase at every shared $\mu_B$, the system stays deconfined
-# once formed:
+# **(2) No re-hadronization.** Once the deconfined CFL phase forms it must stay
+# deconfined: it has to out-pressure the hadronic phase at every shared $\mu_B$,
 # $$P_{\rm CFL}(\mu_B) \;>\; P_H(\mu_B) \quad \text{on the }\mu_B\text{ overlap.}$$
 #
-# **(3) $2\,M_\odot$ constraint** — the quark-star branch (TOV without a crust)
-# must support $M_{\max} \geq M_{\rm target}\,(=2\,M_\odot)$, consistent with
-# observed heavy pulsars.
+# **(3) $2\,M_\odot$ constraint.** The bare quark-star branch (TOV, no crust) must
+# reach $M_{\max} \geq 2\,M_\odot$, consistent with the heaviest observed pulsars.
 #
-# The hadronic comparison curve $P_H(\mu_B)$ is pre-built once at $T\sim 0$ from
-# the β-equilibrium table loaded above. Accepted candidates are appended to a CSV
-# in `../output/mc_cfl/` so multiple MC runs accumulate.
+# **(4) 2-flavour stability — ordinary nuclei must NOT decay.** The companion of
+# (1): unpaired, charge-neutral, $\beta$-equilibrated **2-flavour** ($u\,d\,e$,
+# $Y_S=0$) matter must *not* itself be bound, otherwise atomic nuclei (made of
+# $u,d$) would spontaneously convert to quark matter:
+# $$\left.\frac{\varepsilon}{n_B}\right|^{(ud e)}_{P=0,\,T=0} \;>\; 930~\text{MeV}.$$
+# So (1) bounds the window from *above* in $B^{1/4}$ and (4) from *below* — together
+# they carve out the classic SQM "stability window". This 2-flavour line has no
+# strange quarks, so it is independent of $\Delta_0$ and $m_s$ (one solve per
+# $(\alpha_s,B^{1/4})$ column). It is applied in the $\sigma_{\rm crit}$ scan further
+# down (in `nucleation.analysis`); the Monte-Carlo cell just below applies (1)–(3).
+#
+# **Code choices.**
+# * Filters run **cheap → expensive** with an early reject, so the costly TOV
+#   integration only runs for sets that already pass the algebraic filters.
+# * The CFL EoS is solved density-by-density using the previous point's chemical
+#   potentials as the initial guess (**warm start**) — each root-find is then a few
+#   iterations instead of a cold solve.
+# * $P_H(\mu_B)$ is pre-built once with `interp1d`: $\mu_B(n_B)$ is monotone at fixed
+#   $T$, so $P$ is a single-valued function of $\mu_B$ and the comparison is a lookup.
+# * Accepted candidates are *appended* to a CSV in `../output/mc_cfl/`, so repeated
+#   MC runs accumulate into one growing sample.
 #
 
 # %%
@@ -918,6 +938,7 @@ plt.show()
 quark_param_sets = [
     dict(alpha=0.1*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
     dict(alpha=0.1*np.pi/2, B4=165.0, Delta0=180.0, m_s=100.0),
+    dict(alpha=0.1*np.pi/2, B4=170.0, Delta0=175.0, m_s=100.0),
 ]
 
 sigma_list = [50.0, 100.0, 150.0]      # surface tensions to scan [MeV/fm^2]
@@ -1621,9 +1642,24 @@ fig.tight_layout(); plt.show()
 # %% [markdown]
 # ## Critical surface tension at a star's central conditions
 #
-# For a trapped/isentropic star whose baryonic mass equals that of a cold
-# ($T=0$) $\beta$-eq star of gravitational mass $M_{T0}$, find the surface
-# tension $\sigma$ at which $\tau = \tau_{\rm target}$ at the stellar centre.
+# **Physics.** The surface tension $\sigma$ of the quark–hadron interface is the
+# key unknown of the nucleation problem: it sets the energy cost of the droplet
+# surface and so controls the barrier $W_c$ and the nucleation time $\tau$. Larger
+# $\sigma$ ⇒ taller barrier ⇒ longer $\tau$ (monotone). We therefore define the
+# **critical** surface tension $\sigma_{\rm crit}$ as the value at which
+# $\tau=\tau_{\rm target}$ at the stellar centre: any $\sigma<\sigma_{\rm crit}$
+# nucleates within $\tau_{\rm target}$; any larger value does not.
+#
+# **Star matching.** The relevant central state is that of a *trapped, isentropic*
+# (hot, lepton-rich) star whose baryon number equals that of the cold ($T=0$)
+# $\beta$-eq star of gravitational mass $M_{T0}$ — i.e. the same star before/after
+# cooling. Pipeline: $M_{T0}\!\to\!M_b$ (cold TOV) $\to n_B^{Hc}$ (trapped TOV at
+# $Y_L,S$) $\to T_c=T(n_B^{Hc},Y_L,S)$ $\to$ `brentq` on
+# $\log_{10}\tau-\log_{10}\tau_{\rm target}$ over $[\sigma_{\rm lo},\sigma_{\rm hi}]$.
+#
+# **Code choice.** `lcn`/`gcn` give a $\sigma$-independent $Q^*$ solve (computed
+# once and cached); only `coulomb_minimize` couples $\sigma$ into the droplet solve,
+# so it is re-solved at every $\sigma$ the root-finder visits.
 
 # %%
 # =============================================================================
@@ -1898,7 +1934,8 @@ for p in quark_param_sets:
 # ## Acceptable-parameter scan: CFL filters + nucleation
 #
 # Scan quark parameters $(\alpha_s, B^{1/4}, \Delta_0)$ ($m_s$ fixed) and, for each,
-# (i) apply the three CFL filters (Witten, no-rehadronization, $M_{\max}$ window)
+# (i) apply the four CFL filters (Witten, no-rehadronization, $M_{\max}$ window and
+# 2-flavour stability — see the Filters section)
 # and (ii) compute the **critical surface tension** $\sigma_{\rm crit}$ at which
 # $\tau=\tau_{\rm target}$ at the centre of a trapped star whose baryonic mass
 # matches a cold $\beta$-eq star of mass $M_{T0}$. Since $\tau$ grows with $\sigma$,
@@ -1920,7 +1957,8 @@ for p in quark_param_sets:
 
 # ---- knobs ──────────────────────────────────────────────────────────────────
 # WHAT THIS SCANS. For each grid point (alpha_s, B^1/4, Delta0) we (1) apply the
-# three CFL filters and, if they pass, (2) find sigma_crit = the surface tension
+# four CFL filters (Witten, no-rehadronization, M_max, and 2-flavour stability)
+# and, if they pass, (2) find sigma_crit = the surface tension
 # at which tau = tau_target at the centre of the MT0-matched trapped star. Because
 # tau grows with sigma, any sigma < sigma_crit nucleates -> sigma_crit is exactly
 # the upper edge of the acceptable-sigma window, and it is what the heatmap colours.
@@ -1940,9 +1978,16 @@ for p in quark_param_sets:
 #   alpha_slices      the alpha_s values -> one heatmap panel each.
 #   B4_grid_scan      panel x-axis: np.linspace(lo, hi, N). Raise N for finer maps.
 #   Delta0_grid_scan  panel y-axis: np.linspace(lo, hi, N).
-# COST: runtime ~ |alpha| x |B4| x |Delta0| CFL EoS solves (~1.4 s each); the gcn
-#   nucleation on top is negligible. 20x20x3 ~ 28 min. For a quick first pass, drop
-#   the 3rd linspace arg (e.g. 8) and use one alpha. Reruns are saved to .npz below.
+# 2-FLAVOUR FILTER: on by default (FilterConfig.check_2flavor=True, threshold
+#   FilterConfig.e_over_nB_2flavor=930 MeV). It rejects (alpha_s,B^1/4) columns where
+#   2-flavour ud matter is itself bound (nuclei would decay); being Delta0/m_s-
+#   independent it costs only one extra solve per column. To disable, set
+#   _filt_cfg.check_2flavor=False in the engine cell above.
+# COST: dominated by the per-cell CFL EoS + TOV solve (warm-started, ~tens of ms
+#   each) plus the once-per-column 2-flavour solve; the gcn nucleation on top is
+#   negligible (coulomb_minimize is much heavier). A 50x50x3 grid is a few minutes on
+#   all cores. For a quick first pass shrink the linspace counts (e.g. 20) and use one
+#   alpha. Reruns are saved to .npz below and re-plottable without rescanning.
 #   Reused unchanged from earlier cells: m_s_fixed, sig_lo/sig_hi, YLH, S,
 #   tau_sigma_target (so this scan shares the exact nucleation setup of the table).
 MT0_grid_thr     = [1.4]
