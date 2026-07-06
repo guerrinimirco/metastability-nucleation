@@ -31,6 +31,7 @@ from scipy.optimize import brentq
 
 from eos.alphabag.parameters import get_alphabag_custom
 from eos.alphabag.eos import solve_cfl, solve_alphabag_fixed_yc_ys
+from eos.alphabag.thermodynamics_quarks import T_critical   # CFL gap melting temp (single source)
 from eos.general.physics_constants import hc
 from eos.tov.solver import (EOSTable_for_TOV, generate_ec_logspace,
                             compute_tov_sequence, truncate_to_stable_branch)
@@ -86,7 +87,6 @@ class NucConfig:
     n_sigma_scan: int = 40          # coarse sigma grid for the robust sigma_crit scan
     tau_target: float = 1e-3        # s
     V: float = 4.18879e51           # fm^3 (sphere R = 100 m)
-    T_c_factor: float = 0.57        # CFL: T_c = T_c_factor * Delta0
     include_photons: bool = True
     include_gluons: bool = True
     include_thermal_neutrinos: bool = True
@@ -284,10 +284,14 @@ def replay_cfl(alpha, B4, Delta0, cfg: FilterConfig):
 # =============================================================================
 #  Single-point nucleation
 # =============================================================================
-def crossover_radius(T, Delta0, T_c_factor=0.57):
-    """unpCFL coherence radius R_x(T) = hc/Delta(T), Delta(T)=Delta0*sqrt(1-(T/Tc)^2),
-    Tc = T_c_factor*Delta0; inf above Tc (no pairing -> purely unpaired droplet)."""
-    T_c = T_c_factor * Delta0
+def crossover_radius(T, Delta0):
+    """unpCFL coherence radius R_x(T) = hc/Delta(T), using the SAME CFL gap as the
+    EoS: Delta(T)=Delta0*sqrt(1-(T/Tc)^2) with Tc=T_critical(Delta0) (=0.57*2^(1/3)
+    *Delta0, incl. the CFL enhancement). inf at/above Tc (no pairing -> unpaired).
+    Tc is taken from eos.T_critical so R_x can never drift from the gap in gap_cfl."""
+    if Delta0 <= 0:
+        return np.inf
+    T_c = T_critical(Delta0)
     ratio = np.asarray(T / T_c)
     gap = np.where(ratio < 1, Delta0 * np.sqrt(np.maximum(0, 1 - ratio**2)), 0.0)
     return np.where(gap > 0, hc / gap, np.inf)
@@ -358,7 +362,7 @@ def tau_pt(sigma, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc: 
             dnC_u = (float(Qu.Y_C) - float(Qu.Y_e)) * float(Qu.n_B)
         else:                                   # no unpaired critical droplet
             Dfu = Rc_u = dnC_u = np.nan
-        Rx = float(crossover_radius(T_c, Delta0, nuc.T_c_factor))
+        Rx = float(crossover_radius(T_c, Delta0))
         R_c, W_c, S = _find_Rc_Wc_step(
             np.asarray(Rc_u, float), np.asarray(Rc_c, float), Rx,
             lambda R: switching_step(R, Rx),
