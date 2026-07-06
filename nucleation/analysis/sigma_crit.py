@@ -23,7 +23,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Callable, Optional, Sequence
+from typing import Callable
 
 import numpy as np
 from scipy.interpolate import interp1d
@@ -38,7 +38,7 @@ from eos.tov.solver import (EOSTable_for_TOV, generate_ec_logspace,
 from nucleation.energy_barrier.small_droplet.solvers import get_solver_Qs
 from nucleation.energy_barrier.small_droplet.barrier import (
     driving_force, critical_radius_noCoulomb, critical_work_noCoulomb,
-    work_of_formation, switching_step)
+    work_of_formation)
 from nucleation.energy_barrier.small_droplet.observables import _find_Rc_Wc_step
 from nucleation.general_nucleation.thermal import nucleation_rate, nucleation_time
 
@@ -260,9 +260,16 @@ def passes_cfl_filters(alpha, B4, Delta0, cfg: FilterConfig):
     return True, M_max, 'OK'
 
 
-def replay_cfl(alpha, B4, Delta0, cfg: FilterConfig):
+def replay_cfl(alpha, B4, Delta0, cfg: FilterConfig, e_c_vec=None):
     """Cold CFL EoS + TOV for one set -> dict(mu, P, R, M) or None on failure.
-    (TOV cols 3=R[km], 4=M[Msun].)"""
+
+    Plot-oriented replay: the M-R curve only feeds a figure, so the TOV sweep
+    uses a coarser central-density grid than the acceptance filter (40 points
+    instead of cfg.e_c_vec_tov's 80), skips the baryonic-mass quadrature (M_b
+    is never plotted) and slices the stable branch at argmax(M) directly
+    (no find_mmax_precise refinement). ~2x faster per set than the filter path
+    with a visually identical curve. Pass e_c_vec to override the grid.
+    (Raw TOV cols without M_b: 0=e_c 1=n_c 2=P_c 3=R[km] 4=M[Msun].)"""
     P, e, mu, ok = cfl_eos_at_params(alpha, B4, Delta0, cfg)
     if ok.sum() < 20:
         return None
@@ -270,15 +277,61 @@ def replay_cfl(alpha, B4, Delta0, cfg: FilterConfig):
     pos = P_ok > 0
     if pos.sum() < 10:
         return None
+    if e_c_vec is None:
+        e_c_vec = generate_ec_logspace(e_min=100, e_max=2000, n_points=40)
     try:
         tov = compute_tov_sequence(
             EOSTable_for_TOV(P=P_ok[pos], epsilon=e_ok[pos], nB=n_ok[pos]),
-            e_c_vec=cfg.e_c_vec_tov, add_crust_table='No',
-            compute_baryonic_mass=True, compute_tidal=False, verbose=False)
-        st, _, _ = truncate_to_stable_branch(tov, verbose=False)
+            e_c_vec=e_c_vec, add_crust_table='No',
+            compute_baryonic_mass=False, compute_tidal=False, verbose=False)
     except Exception:
         return None
-    return dict(mu=mu_ok, P=P_ok, R=st[:, 3], M=st[:, 4])
+    if tov.shape[0] < 3:
+        return None
+    i_max = int(np.argmax(tov[:, 4])) + 1          # stable branch: up to M_max
+    return dict(mu=mu_ok, P=P_ok, R=tov[:i_max, 3], M=tov[:i_max, 4])
+
+
+def replay_accepted(sig_crit, alpha_slices, B4_grid, Delta0_grid,
+                    cfg: FilterConfig, max_curves=None, n_jobs=-1, verbose=True):
+    """Replay the cold CFL EoS + TOV of every ACCEPTED cell of a sigma_crit grid.
+
+    Accepted = finite sigma_crit (CFL-pass AND nucleating). Each replay is an
+    independent (EoS solve + TOV) -> joblib-parallel over cells. ``max_curves``
+    evenly subsamples the accepted list first: for an overlay plot a few
+    hundred curves are visually identical to several thousand at a fraction of
+    the cost (None = replay all).
+
+    Returns
+    -------
+    list of (curve_dict, sigma_crit) with curve_dict from ``replay_cfl``
+    (keys mu, P, R, M); failed replays are dropped.
+    """
+    alpha_slices = np.atleast_1d(alpha_slices)
+    accept = [(alpha_slices[ia], B4_grid[jx], Delta0_grid[i],
+               float(sig_crit[ia, i, jx]))
+              for ia in range(len(alpha_slices))
+              for i in range(len(Delta0_grid))
+              for jx in range(len(B4_grid))
+              if np.isfinite(sig_crit[ia, i, jx])]
+    n_total = len(accept)
+    if max_curves and n_total > max_curves:
+        accept = accept[::int(np.ceil(n_total / max_curves))]
+    if verbose:
+        print(f"replay: {len(accept)}/{n_total} accepted cells "
+              f"(max_curves={max_curves}), "
+              f"{'parallel' if (n_jobs != 1 and _HAVE_JOBLIB) else 'serial'}...",
+              flush=True)
+    if n_jobs != 1 and _HAVE_JOBLIB:
+        from joblib import Parallel, delayed
+        out = Parallel(n_jobs=n_jobs, verbose=(5 if verbose else 0))(
+            delayed(replay_cfl)(a, b, d, cfg) for a, b, d, _ in accept)
+    else:
+        out = [replay_cfl(a, b, d, cfg) for a, b, d, _ in accept]
+    curves = [(c, sc) for c, (_, _, _, sc) in zip(out, accept) if c is not None]
+    if verbose:
+        print(f"replay: reconstructed {len(curves)}/{len(accept)} curves.", flush=True)
+    return curves
 
 
 # =============================================================================
@@ -297,21 +350,32 @@ def crossover_radius(T, Delta0):
     return np.where(gap > 0, hc / gap, np.inf)
 
 
+def hadronic_point(H_trapped: dict, nB, YL, T):
+    """Trapped hadronic state (SimpleNamespace) at one (n_B, Y_L, T) point.
+
+    Evaluates the trapped-neutrino interpolator dict at the point and packs
+    every field the Q* solvers and ``driving_force`` need. Charge neutrality
+    of the bulk hadronic phase fixes Y_e = Y_C; lepton-number conservation
+    fixes Y_nu = Y_L - Y_C."""
+    pt = (nB, YL, T)
+    h = SimpleNamespace(
+        n_B=float(nB), T=float(T),
+        P_total=float(H_trapped['P'](*pt)),   e_total=float(H_trapped['eps'](*pt)),
+        mu_B=float(H_trapped['mu_B'](*pt)),   mu_C=float(H_trapped['mu_C'](*pt)),
+        mu_S=float(H_trapped['mu_S'](*pt)),   mu_e=float(H_trapped['mu_e'](*pt)),
+        mu_nu=float(H_trapped['mu_nu'](*pt)),
+        Y_C=float(H_trapped['Y_C'](*pt)),     Y_S=float(H_trapped['Y_S'](*pt)))
+    h.Y_e = h.Y_C
+    h.Y_nu = float(YL) - h.Y_C
+    return h
+
+
 def central_state(MT0, star: StarMatch):
     """(nBHc, T_c, H_pt) at the centre of the trapped star with Mb = Mb(MT0)."""
     Mb = float(star.Mb_of_MT0(MT0))
     nBHc = float(star.nBHc_of_Mb(Mb))
     T_c = float(star.H_iso_trapped['T'](nBHc, star.YLH, star.S))
-    pt = (nBHc, star.YLH, T_c)
-    Ht = star.H_trapped
-    H_pt = SimpleNamespace(
-        n_B=nBHc, T=T_c,
-        P_total=float(Ht['P'](*pt)),   e_total=float(Ht['eps'](*pt)),
-        mu_B=float(Ht['mu_B'](*pt)),   mu_C=float(Ht['mu_C'](*pt)),
-        mu_S=float(Ht['mu_S'](*pt)),   mu_e=float(Ht['mu_e'](*pt)),
-        mu_nu=float(Ht['mu_nu'](*pt)),
-        Y_C=float(Ht['Y_C'](*pt)),     Y_S=float(Ht['Y_S'](*pt)))
-    H_pt.Y_e, H_pt.Y_nu = H_pt.Y_C, star.YLH - H_pt.Y_C
+    H_pt = hadronic_point(star.H_trapped, nBHc, star.YLH, T_c)
     return nBHc, T_c, H_pt
 
 
@@ -340,9 +404,23 @@ def _Rc_single(Df, R_c_solver, sigma, charge):
     return float(R_c_solver)
 
 
-def tau_pt(sigma, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc: NucConfig):
-    """Central nucleation time tau at one sigma, for one droplet phase.
-    unpCFL combines unpaired + cfl via the step switching at R_x(T_c)."""
+def critical_droplet_pt(sigma, H_pt, T_c, flavor, charge, phase, cache,
+                        params, Delta0, nuc: NucConfig):
+    """Critical droplet at one hadronic point: (R_c [fm], W_c [MeV], Qs).
+
+    The single source for the per-point barrier used by both ``tau_pt`` (the
+    sigma_crit root-find) and the notebook's droplet-observable plots, so the
+    barrier physics can never diverge between them.
+
+    Returns
+    -------
+    (R_c, W_c, Qs) with the conventions
+      * (nan, nan, None)  -- solver failed / no critical droplet found;
+      * (nan, inf,  Qs)   -- hadronic phase STABLE (Delta_f >= 0): the barrier
+                             is infinite, nucleation never happens;
+      * finite values     -- genuine critical droplet; Qs is the droplet state
+                             (for unpCFL: the phase selected at the peak).
+    """
     if phase == 'unpCFL':
         Qu, Rcu = _solve_phase(sigma, H_pt, flavor, charge, 'unpaired', cache, params, Delta0, nuc)
         Qc, Rcc = _solve_phase(sigma, H_pt, flavor, charge, 'cfl', cache, params, Delta0, nuc)
@@ -352,7 +430,7 @@ def tau_pt(sigma, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc: 
         # failure of the unpCFL point: with R_c_unp = NaN the step combiner
         # falls back to the CFL upper branch. So bail only if the CFL core fails.
         if Qc is None:
-            return np.nan
+            return np.nan, np.nan, None
         Dfc = float(driving_force(Qc, H_pt))
         Rc_c = _Rc_single(Dfc, Rcc, sigma, charge)
         dnC_c = (float(Qc.Y_C) - float(Qc.Y_e)) * float(Qc.n_B)
@@ -365,36 +443,46 @@ def tau_pt(sigma, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc: 
         Rx = float(crossover_radius(T_c, Delta0))
         R_c, W_c, S = _find_Rc_Wc_step(
             np.asarray(Rc_u, float), np.asarray(Rc_c, float), Rx,
-            lambda R: switching_step(R, Rx),
             np.asarray(Dfu, float), np.asarray(Dfc, float),
             np.asarray(dnC_u, float), np.asarray(dnC_c, float), sigma)
         R_c, W_c, S = float(R_c), float(W_c), float(S)
-        if not (np.isfinite(R_c) and R_c > 0 and np.isfinite(W_c) and W_c > 0):
-            return np.nan
+        if np.isposinf(W_c):                    # both phases non-favoured
+            return np.nan, np.inf, Qc
         Qs_sel = Qc if S > 0.5 else Qu
         if Qs_sel is None:                      # unpaired peak selected but absent
-            return np.nan
-        Gamma = float(nucleation_rate(W_c, R_c, sigma, T_c, H_pt, Qs_sel))
-        return float(nucleation_time(Gamma, nuc.V)) if Gamma > 0 else np.inf
+            return np.nan, np.nan, None
+        return R_c, W_c, Qs_sel
 
     Qs, R_c = _solve_phase(sigma, H_pt, flavor, charge, phase, cache, params, Delta0, nuc)
     if Qs is None:
-        return np.nan
+        return np.nan, np.nan, None
     Df = float(driving_force(Qs, H_pt))
-    if Df >= 0:
-        return np.inf
+    if Df >= 0:                                 # H stable: infinite barrier
+        return np.nan, np.inf, Qs
     if charge in ('lcn', 'gcn'):
-        Rc_v, W_c = (float(critical_radius_noCoulomb(Df, sigma)),
-                     float(critical_work_noCoulomb(Df, sigma)))
-    else:
-        if R_c is None or not np.isfinite(R_c) or R_c <= 0:
-            return np.nan
-        Rc_v = float(R_c)
-        dnC = (float(Qs.Y_C) - float(Qs.Y_e)) * float(Qs.n_B)
-        W_c = float(work_of_formation(Rc_v, Df, sigma, dnC))
-    if not np.isfinite(W_c) or W_c <= 0:
+        return (float(critical_radius_noCoulomb(Df, sigma)),
+                float(critical_work_noCoulomb(Df, sigma)), Qs)
+    Rc_v = _Rc_single(Df, R_c, sigma, charge)
+    if not np.isfinite(Rc_v):
+        return np.nan, np.nan, Qs
+    dnC = (float(Qs.Y_C) - float(Qs.Y_e)) * float(Qs.n_B)
+    return Rc_v, float(work_of_formation(Rc_v, Df, sigma, dnC)), Qs
+
+
+def tau_pt(sigma, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc: NucConfig):
+    """Central nucleation time tau [s] at one sigma, for one droplet phase.
+
+    Thin wrapper over ``critical_droplet_pt``: converts (R_c, W_c, Qs) to a
+    Langer rate and tau = 1/(Gamma V). Returns NaN on solver failure, +inf
+    when the hadronic phase is stable (W_c = inf -> never nucleates)."""
+    R_c, W_c, Qs = critical_droplet_pt(sigma, H_pt, T_c, flavor, charge, phase,
+                                       cache, params, Delta0, nuc)
+    if np.isposinf(W_c):
+        return np.inf
+    if Qs is None or not (np.isfinite(R_c) and R_c > 0
+                          and np.isfinite(W_c) and W_c > 0):
         return np.nan
-    Gamma = float(nucleation_rate(W_c, Rc_v, sigma, T_c, H_pt, Qs))
+    Gamma = float(nucleation_rate(W_c, R_c, sigma, T_c, H_pt, Qs))
     return float(nucleation_time(Gamma, nuc.V)) if Gamma > 0 else np.inf
 
 

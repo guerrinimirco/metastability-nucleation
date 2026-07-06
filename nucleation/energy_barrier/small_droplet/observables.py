@@ -1096,6 +1096,24 @@ def compute_nucleation_density(nucleation_obs, tau_target=1.0, scan='T',
         raise ValueError(f"Unsupported eq_type: '{eq_type}'")
 
 
+def nucleation_curve(result, iYL=None):
+    """(n_B, T) arrays of the tau = tau_target curve from a density-scan result.
+
+    Slices the output of ``compute_nucleation_density(..., scan='n_B')`` at one
+    outer-axis index (iYL for trapped tables; None for beta_eq). Returns the
+    curve ready to plot: n_B [fm^-3] against T_nuc [MeV] (NaN where no
+    crossing was found).
+    """
+    nB = np.asarray(result.n_B_arr)
+    T = np.asarray(result.T_nuc)
+    if T.ndim == 2:
+        if iYL is None:
+            raise ValueError("iYL required for a 2D (trapped/fixed_yc) result")
+        T = T[:, iYL]
+        nB = nB[:, iYL] if nB.ndim == 2 else nB
+    return nB, T
+
+
 def build_nucleation_temperature_interpolator(result, kind='cubic'):
     """Build a smooth T_nuc interpolator from converged points only.
 
@@ -1915,7 +1933,7 @@ def _blend_phase(S, A_unp, B_cfl):
     return out
 
 
-def _find_Rc_Wc_step(R_c_unp, R_c_cfl, Rx, S_func,
+def _find_Rc_Wc_step(R_c_unp, R_c_cfl, Rx,
                      Delta_f_unp, Delta_f_cfl,
                      delta_n_C_unp, delta_n_C_cfl, sigma,
                      Delta_f_unp_atRx=None, delta_n_C_unp_atRx=None):
@@ -1999,6 +2017,18 @@ def _find_Rc_Wc_step(R_c_unp, R_c_cfl, Rx, S_func,
     valid = np.isfinite(W_below) | np.isfinite(W_above)
     R_c = np.where(valid, R_c, np.nan)
     W_c = np.where(valid, W_c, np.nan)
+
+    # ---- no-barrier guard: neither phase favoured ----------------------------
+    # If Delta_f >= 0 for BOTH phases (H stable against both), W(R) rises
+    # without bound above Rx and there is NO critical droplet: the kink value
+    # W(Rx) computed above is just the maximum over [0, Rx], not a barrier.
+    # Mark those points W_c = +inf (never nucleates), R_c = NaN. Points where a
+    # solver simply failed (Delta_f NaN on both) stay NaN (unknown), not inf.
+    favoured_any = (Delta_f_unp < 0) | (Delta_f_cfl < 0)      # NaN < 0 is False
+    finite_any = np.isfinite(Delta_f_unp) | np.isfinite(Delta_f_cfl)
+    no_barrier = finite_any & ~favoured_any
+    R_c = np.where(no_barrier, np.nan, R_c)
+    W_c = np.where(no_barrier, np.inf, W_c)
     return R_c, W_c, S_at_Rc
 
 
@@ -2440,11 +2470,10 @@ def _compute_thermal_nucleation_unpCFL(
         delta_n_C_unp_atRx = None
 
     # ---- Step 4: Critical radius and barrier height ----
-    S_func = get_switching_function(switching_mode, Rx, switching_width)
     R_c_unp = q_d_unp['R_c']
     R_c_cfl = q_d_cfl['R_c']
     common_kw = dict(
-        R_c_unp=R_c_unp, R_c_cfl=R_c_cfl, Rx=Rx, S_func=S_func,
+        R_c_unp=R_c_unp, R_c_cfl=R_c_cfl, Rx=Rx,
         Delta_f_unp=Delta_f_unp, Delta_f_cfl=Delta_f_cfl,
         delta_n_C_unp=delta_n_C_unp, delta_n_C_cfl=delta_n_C_cfl,
         sigma=sigma,
@@ -2487,7 +2516,8 @@ def _compute_thermal_nucleation_unpCFL(
     elif switching_mode == 'tanh':
         if Delta_f_unp_atRx is not None:
             raise NotImplementedError("Coulomb_minimize mode not yet implemented for switching_mode == 'tanh'.")
-        R_c, W_c = _find_Rc_Wc_tanh(**common_kw)
+        S_func = get_switching_function(switching_mode, Rx, switching_width)
+        R_c, W_c = _find_Rc_Wc_tanh(S_func=S_func, **common_kw)
         S_at_Rc = S_func(R_c)
 
 
