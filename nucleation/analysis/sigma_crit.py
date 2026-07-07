@@ -30,7 +30,8 @@ from scipy.interpolate import interp1d
 from scipy.optimize import brentq
 
 from eos.alphabag.parameters import get_alphabag_custom
-from eos.alphabag.eos import solve_cfl, solve_alphabag_fixed_yc_ys
+from eos.alphabag.eos import (solve_cfl, solve_alphabag_beta_eq,
+                              solve_alphabag_fixed_yc_ys)
 from eos.alphabag.thermodynamics_quarks import T_critical   # CFL gap melting temp (single source)
 from eos.general.physics_constants import hc
 from eos.tov.solver import (EOSTable_for_TOV, generate_ec_logspace,
@@ -77,6 +78,11 @@ class FilterConfig:
     # nuclei would decay to it -> require e/nB|P=0 > e_over_nB_2flavor (Delta0-independent).
     check_2flavor: bool = True
     e_over_nB_2flavor: float = 930.0
+    # TOV backend for the M_max filter and the M-R replay: 'scipy' (trusted
+    # reference) or 'fast' (numba, ~100x). The scan/replay already parallelise
+    # over grid cells with joblib, so the fast solver is called serially here
+    # (tov_parallel=False) to avoid numba-threads x joblib-processes oversubscription.
+    tov_backend: str = 'scipy'
 
 
 @dataclass
@@ -153,6 +159,29 @@ def cfl_eos_at_params(alpha, B4, Delta0, cfg: FilterConfig):
             continue
         P[i], e[i], mu[i] = r.P_total, r.e_total, r.mu_B
         guess = np.array([r.mu_u, r.mu_d, r.mu_s])
+        ok[i] = True
+    return P, e, mu, ok
+
+
+def unpaired_eos_at_params(alpha, B4, cfg: FilterConfig):
+    """Solve the UNPAIRED beta-eq alpha-Bag EoS at T=cfg.T_eos over cfg.n_B_grid
+    (warm-started). Returns (P, e, mu, ok-mask). No Delta_0 — an unpaired droplet
+    has no CFL gap, so the unpaired-matter viability filters never reference it."""
+    p = get_alphabag_custom(alpha=alpha, B4=B4, m_s=cfg.m_s)
+    n = cfg.n_B_grid
+    P = np.full_like(n, np.nan); e = np.full_like(n, np.nan); mu = np.full_like(n, np.nan)
+    ok = np.zeros_like(n, dtype=bool)
+    guess = None
+    for i, nB in enumerate(n):
+        try:
+            r = solve_alphabag_beta_eq(nB, cfg.T_eos, p, include_photons=False,
+                                       include_gluons=True, initial_guess=guess)
+        except Exception:
+            r = None
+        if r is None or not r.converged or r.error > 1e-6:
+            continue
+        P[i], e[i], mu[i] = r.P_total, r.e_total, r.mu_B
+        guess = np.array([r.mu_u, r.mu_d, r.mu_s, r.mu_e])   # beta-eq has 4 unknowns
         ok[i] = True
     return P, e, mu, ok
 
@@ -250,7 +279,56 @@ def passes_cfl_filters(alpha, B4, Delta0, cfg: FilterConfig):
         tov = compute_tov_sequence(
             EOSTable_for_TOV(P=P_ok[pos], epsilon=e_ok[pos], nB=n_ok[pos]),
             e_c_vec=cfg.e_c_vec_tov, add_crust_table='No',
-            compute_baryonic_mass=True, compute_tidal=False, verbose=False)
+            compute_baryonic_mass=True, compute_tidal=False, verbose=False,
+            backend=cfg.tov_backend, tov_parallel=False)
+        _, M_max, _ = truncate_to_stable_branch(tov, verbose=False)
+    except Exception:
+        return False, np.nan, 'mmax'
+    lo, hi = cfg.M_max_window
+    if not np.isfinite(M_max) or not (lo <= M_max <= hi):
+        return False, M_max, 'mmax'
+    return True, M_max, 'OK'
+
+
+def passes_unpaired_filters(alpha, B4, cfg: FilterConfig):
+    """(ok, M_max, reason) for UNPAIRED strange-quark matter — the filter built
+    on the UNPAIRED alpha-Bag EoS (no Delta_0):
+
+      (1) no re-hadronization: P_unp(mu_B) > P_H(mu_B) on the mu_B overlap;
+      (2) TOV M_max in cfg.M_max_window, structure integrated with the
+          UNPAIRED quark EoS (not CFL).
+
+    Unlike ``passes_cfl_filters`` there is no Witten / 2-flavour column here and
+    no Delta_0 anywhere: the whole point is that the unpaired sigma_crit map is
+    gap-independent, so its viability gate must be too."""
+    P_q, e_q, mu_q, ok = unpaired_eos_at_params(alpha, B4, cfg)
+    if ok.sum() < 20:
+        return False, np.nan, 'solve'
+    n_ok, P_ok, e_ok, mu_ok = cfg.n_B_grid[ok], P_q[ok], e_q[ok], mu_q[ok]
+
+    # (1) no re-hadronization — P_unp must exceed P_H on the mu_B overlap.
+    mu_lo = max(mu_ok.min(), cfg.mu_B_H_sorted.min())
+    mu_hi = min(mu_ok.max(), cfg.mu_B_H_sorted.max())
+    if mu_hi <= mu_lo:
+        return False, np.nan, 'rehadr'
+    mu_chk = np.linspace(mu_lo, mu_hi, 500)
+    Pc = interp1d(mu_ok, P_ok, kind='linear', bounds_error=False,
+                  fill_value=np.nan)(mu_chk)
+    Ph = cfg.P_H_of_muB(mu_chk)
+    m = np.isfinite(Pc) & np.isfinite(Ph)
+    if not np.all(Pc[m] > Ph[m]):
+        return False, np.nan, 'rehadr'
+
+    # (2) M_max from the UNPAIRED quark EoS.
+    pos = P_ok > 0
+    if pos.sum() < 10:
+        return False, np.nan, 'mmax'
+    try:
+        tov = compute_tov_sequence(
+            EOSTable_for_TOV(P=P_ok[pos], epsilon=e_ok[pos], nB=n_ok[pos]),
+            e_c_vec=cfg.e_c_vec_tov, add_crust_table='No',
+            compute_baryonic_mass=True, compute_tidal=False, verbose=False,
+            backend=cfg.tov_backend, tov_parallel=False)
         _, M_max, _ = truncate_to_stable_branch(tov, verbose=False)
     except Exception:
         return False, np.nan, 'mmax'
@@ -283,7 +361,8 @@ def replay_cfl(alpha, B4, Delta0, cfg: FilterConfig, e_c_vec=None):
         tov = compute_tov_sequence(
             EOSTable_for_TOV(P=P_ok[pos], epsilon=e_ok[pos], nB=n_ok[pos]),
             e_c_vec=e_c_vec, add_crust_table='No',
-            compute_baryonic_mass=False, compute_tidal=False, verbose=False)
+            compute_baryonic_mass=False, compute_tidal=False, verbose=False,
+            backend=cfg.tov_backend, tov_parallel=False)
     except Exception:
         return None
     if tov.shape[0] < 3:
@@ -640,6 +719,57 @@ def scan_cfl_filters(alpha_slices, B4_grid, Delta0_grid, cfg: FilterConfig,
               f"M_max outside {cfg.M_max_window}: {c['mmax']}, "
               f"2-flavor bound (e/nB<={cfg.e_over_nB_2flavor:g}): {c['twoflavor']}",
               flush=True)
+    _filter_cache[key] = (cfl, mm, rs)
+    return cfl, mm, rs
+
+
+def scan_unpaired_filters(alpha_slices, B4_grid, cfg: FilterConfig,
+                          reuse=True, verbose=True, n_jobs=-1):
+    """(ok, M_max, reason) stacks over the (alpha_s, B4) grid for UNPAIRED matter.
+
+    Companion to ``scan_cfl_filters`` for the gap-free unpaired channel. Returns
+    the same 3-D ``(NA, ND, NB)`` layout with a SINGLETON Delta_0 axis (ND=1), so
+    the result drops straight into ``compute_sigma_crit`` / ``plot_sigma_crit_grid``
+    (which expect an (alpha, Delta_0, B4) stack) without special-casing. Per cell
+    it runs ``passes_unpaired_filters`` (no-rehadronization + unpaired-EoS M_max);
+    joblib-parallel over cells, cached on the grid + acceptance constants."""
+    alpha_slices = np.atleast_1d(np.asarray(alpha_slices, float))
+    key = ('unpaired', tuple(np.round(alpha_slices, 6)),
+           tuple(np.round(np.asarray(B4_grid), 6)),
+           float(cfg.m_s), tuple(cfg.M_max_window))
+    if reuse and key in _filter_cache:
+        if verbose:
+            print("Unpaired filter: reusing cached grid result.", flush=True)
+        return _filter_cache[key]
+    NA, NB = len(alpha_slices), len(B4_grid)
+    idx = [(ia, jx) for ia in range(NA) for jx in range(NB)]
+    use_par = (n_jobs != 1) and _HAVE_JOBLIB
+    if verbose:
+        print(f"Unpaired filter scan: {NA}x{NB}={len(idx)} cells, "
+              f"{('parallel n_jobs=%d' % n_jobs) if use_par else 'serial'}...", flush=True)
+    t0 = time.perf_counter()
+    if use_par:
+        from joblib import Parallel, delayed
+        res = Parallel(n_jobs=n_jobs, verbose=(10 if verbose else 0))(
+            delayed(passes_unpaired_filters)(alpha_slices[ia], B4_grid[jx], cfg)
+            for (ia, jx) in idx)
+    else:
+        res = [passes_unpaired_filters(alpha_slices[ia], B4_grid[jx], cfg)
+               for (ia, jx) in idx]
+    cfl = np.zeros((NA, 1, NB), dtype=bool)
+    mm = np.full((NA, 1, NB), np.nan)
+    rs = np.zeros((NA, 1, NB), dtype=np.int8)
+    for (ia, jx), (ok, M_max, reason) in zip(idx, res):
+        cfl[ia, 0, jx] = ok
+        mm[ia, 0, jx] = M_max
+        rs[ia, 0, jx] = REASON_CODE[reason]
+    if verbose:
+        npass = int(cfl.sum())
+        c = {n: int((rs == k).sum()) for n, k in REASON_CODE.items()}
+        print(f"  Unpaired filter done in {time.perf_counter()-t0:.1f}s: "
+              f"pass {npass}/{len(idx)} ({100*npass/max(len(idx),1):.0f}%); "
+              f"rejected -> no solve: {c['solve']}, re-hadronizes: {c['rehadr']}, "
+              f"M_max outside {cfg.M_max_window}: {c['mmax']}", flush=True)
     _filter_cache[key] = (cfl, mm, rs)
     return cfl, mm, rs
 

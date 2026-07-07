@@ -135,6 +135,13 @@ from nucleation.analysis.figure import (
 # is relative to the notebooks/ cwd. Regenerate offline if the samples change.
 CONTOUR_DIR = "../../eos/plot/data/contours"
 
+# ─── TOV backend (one switch for the whole notebook + σ_crit engine) ─────────
+# 'fast'  → numba Dormand-Prince RK45 solver (eos.tov.solver_fast), ~100-1000x
+#           faster; the right choice for the heavy Part-IV CFL scans/replays.
+# 'scipy' → the trusted adaptive DOP853 reference (fall back here to cross-check
+#           or if numba is unavailable). Both give the same columns & physics.
+TOV_BACKEND = 'fast'
+
 
 # ─── Output directories (created once, idempotent) ───────────────────────────
 for d in ('../output/tables_Hphase', '../output/tables_tov',
@@ -263,7 +270,7 @@ params = create_custom_parametrization(
 quark_param_sets = [
     dict(alpha=0.1*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
     #dict(alpha=0.1*np.pi/2, B4=165.0, Delta0=180.0, m_s=100.0),
-    #dict(alpha=0.1*np.pi/2, B4=170.0, Delta0=175.0, m_s=100.0),
+    dict(alpha=0.1*np.pi/2, B4=170.0, Delta0=175.0, m_s=100.0),
     dict(alpha=0.18*np.pi/2, B4=150.0, Delta0=126.0, m_s=100.0),  # marginalized posterior
     dict(alpha=0.08*np.pi/2, B4=158.0, Delta0=157.0, m_s=100.0)   # maximum posterior
 ]
@@ -459,7 +466,7 @@ results_tov_full = compute_tov_sequence(
     add_crust_table='compose_sfho_nT0_beta', add_crust_mode='interpolate',
     n_transition=n_transition, delta_n=delta_n,
     compute_baryonic_mass=True, compute_tidal=False,
-    verbose=True,
+    backend=TOV_BACKEND, verbose=True,
 )
 
 # Keep only the stable branch (everything up to M_max), save to disk.
@@ -508,7 +515,7 @@ for YL in YL_values_tov:
             n_transition=n_transition, delta_n=delta_n,
             crust_YL=YL, crust_S=S,
             compute_baryonic_mass=True, compute_tidal=False,
-            verbose=False,
+            backend=TOV_BACKEND, verbose=False,
         )
 
         results, M_max, _ = truncate_to_stable_branch(
@@ -968,10 +975,13 @@ _sig_methods = [
 ]
 
 # Config objects consumed by the engine (P_H arrays come from Part III.1).
+# tov_backend=TOV_BACKEND routes the CFL M_max filter and the M-R replay through
+# the fast solver too — that (not Part II) is where most TOV time is spent.
 _filt_cfg = nuc_an.FilterConfig(
     P_H_of_muB=P_H_of_muB, mu_B_H_sorted=mu_B_H_sorted, P_H_sorted=P_H_sorted,
     m_s=m_s_fixed, n_B_grid=n_B_grid_cfl, e_c_vec_tov=e_c_vec_tov,
-    M_max_window=M_max_window, e_over_nB_max=e_over_nB_max)
+    M_max_window=M_max_window, e_over_nB_max=e_over_nB_max,
+    tov_backend=TOV_BACKEND)
 _nuc_cfg = nuc_an.NucConfig(sig_lo=sig_lo, sig_hi=sig_hi,
                             tau_target=tau_target, V=V_nuc)
 
@@ -1208,6 +1218,85 @@ for p in quark_param_sets:
     print(f"\n=== {q_tag_of(p)} ===  sigma_target [MeV/fm^2] "
           f"(YL={YLH}, S={S}, tau={tau_target:g}s)")
     print(tbl.round(3).to_string())
+
+
+# %% [markdown]
+# ### $\sigma_{\rm crit}(\alpha_s, B^{1/4})$ — unpaired matter, fixed $m_s$
+#
+# Companion to IV.2/IV.3 for the **unpaired** nucleation channel. An unpaired
+# droplet has no CFL gap, so **everything here is $\Delta_0$-independent** — both
+# $\sigma_{\rm crit}$ and the viability filter. Fixing $m_s$, this maps
+# $\sigma_{\rm crit}$ over the $(B^{1/4}, \alpha_s)$ plane (the $\Delta_0$ axis of
+# IV.3 is replaced by $\alpha_s$). The viability filter is built on the
+# **unpaired** quark EoS, not the CFL one:
+#
+# 1. **No re-hadronization** — $P_{\rm unp}(\mu_B) > P_H(\mu_B)$ on the overlap.
+# 2. **$M_{\max}$** — TOV integrated with the **unpaired** quark EoS, in
+#    `M_max_window`.
+#
+# (No Witten / 2-flavour / $\Delta_0$: those belong to the CFL analysis.)
+
+# %%
+# =============================================================================
+#  UNPAIRED sigma_crit heatmap over (B^1/4, alpha_s) at fixed m_s.
+#  Reuses the engine: scan_unpaired_filters (unpaired-EoS viability) +
+#  compute_sigma_crit. No Delta_0 anywhere.
+# =============================================================================
+import dataclasses
+from matplotlib.colors import ListedColormap
+
+# ---- user-configurable inputs ----------------------------------------------
+U_MS           = m_s_fixed            # strange-quark mass [MeV] (the fixed one)
+U_MT0          = 1.4                  # nucleation-threshold grav. mass [M_sun]
+U_CHARGE       = 'coulomb_minimize'   # 'lcn' | 'gcn' | 'coulomb_minimize'
+U_ALPHA_GRID   = np.linspace(0.0, 0.6, 41)       # alpha_s   (y-axis)
+U_B4_GRID      = np.linspace(130.0, 180.0, 41)   # B^1/4 [MeV] (x-axis)
+U_APPLY_FILTER = True                 # grey out non-viable cells (unpaired filter)
+U_NJOBS        = -1
+# -----------------------------------------------------------------------------
+# Unpaired-EoS viability (no-rehadronization + unpaired-TOV M_max) at this m_s.
+_cfgU = dataclasses.replace(_filt_cfg, m_s=U_MS)
+if U_APPLY_FILTER:
+    _cflU, _mmU, _rsU = nuc_an.scan_unpaired_filters(
+        U_ALPHA_GRID, U_B4_GRID, _cfgU, n_jobs=U_NJOBS)
+else:
+    _cflU = np.ones((len(U_ALPHA_GRID), 1, len(U_B4_GRID)), dtype=bool)
+
+# unpaired sigma_crit at the PNS centre, on the viable cells. Delta_0 is a dummy
+# here (the unpaired droplet ignores it); pass a harmless non-zero value.
+_sigU = nuc_an.compute_sigma_crit(
+    _cflU, U_MT0, 'saddlepoint', U_CHARGE, 'unpaired',
+    U_ALPHA_GRID, U_B4_GRID, [100.0], _star, _nuc_cfg,
+    m_s=U_MS, n_jobs=U_NJOBS)
+
+sigU = _sigU[:, 0, :]; cflU = _cflU[:, 0, :]     # drop the singleton Delta_0 axis
+
+# ---- plot: single heatmap, x = B^1/4, y = alpha_s ---------------------------
+_fin = sigU[np.isfinite(sigU)]
+_vmin, _vmax = (float(_fin.min()), float(_fin.max())) if _fin.size else (0.0, 1.0)
+fig, ax = plt.subplots(figsize=(6.6, 5.2))
+# categorical background for non-finite sigma_crit: grey=not viable,
+# orange=viable but never nucleates, teal=nucleates for all tested sigma.
+_cat = np.where(np.isfinite(sigU), np.nan,
+                np.where(~cflU, 0.0, np.where(np.isposinf(sigU), 2.0, 1.0)))
+ax.pcolormesh(U_B4_GRID, U_ALPHA_GRID, np.ma.masked_invalid(_cat),
+              cmap=ListedColormap(['0.85', '#f4a261', '#2a9d8f']),
+              vmin=0, vmax=2, shading='nearest')
+pcm = ax.pcolormesh(U_B4_GRID, U_ALPHA_GRID, np.ma.masked_invalid(sigU),
+                    cmap=plt.cm.viridis, vmin=_vmin, vmax=_vmax, shading='nearest')
+if U_APPLY_FILTER and cflU.any() and (~cflU).any():       # viability boundary
+    ax.contour(U_B4_GRID, U_ALPHA_GRID, cflU.astype(float), levels=[0.5],
+               colors='k', linewidths=1.1, linestyles='--')
+for p in quark_param_sets:                                # mark sets at this m_s
+    if abs(p['m_s'] - U_MS) < 1.0:
+        ax.scatter([p['B4']], [p['alpha']], s=120, marker='*',
+                   c='yellow', edgecolors='k', zorder=5)
+ax.set_xlabel(r'$B^{1/4}$ [MeV]'); ax.set_ylabel(r'$\alpha_s$')
+ax.set_title(rf'unpaired $\sigma_{{\rm crit}}$ — $m_s={U_MS:.0f}$ MeV, '
+             rf'$M_{{T0}}={U_MT0:g}\,M_\odot$, $Y_L={YLH}$, $S={S}$, '
+             rf'$\tau={tau_target*1e3:g}$ ms — {xsd_tag}')
+fig.colorbar(pcm, ax=ax, label=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]')
+fig.tight_layout(); plt.show()
 
 
 # %% [markdown]
@@ -1632,7 +1721,8 @@ def _cold_cfl_stable(pset):
     tov = compute_tov_sequence(
         EOSTable_for_TOV(P=P[pos], epsilon=e[pos], nB=_filt_cfg.n_B_grid[pos]),
         e_c_vec=generate_ec_logspace(e_min=100, e_max=2000, n_points=80),
-        add_crust_table='No', compute_baryonic_mass=True, compute_tidal=False, verbose=False)
+        add_crust_table='No', compute_baryonic_mass=True, compute_tidal=False,
+        backend=TOV_BACKEND, verbose=False)
     st, Mmax, _ = truncate_to_stable_branch(tov, verbose=False)
     return st, Mmax
 
@@ -1862,7 +1952,7 @@ set_paper_style()
 # ---- knobs ----
 FN_SET    = quark_param_sets[0]          # quark parametrization
 FN_FLAVOR = 'saddlepoint'
-FN_CHARGE = 'gcn'
+FN_CHARGE = 'coulomb_minimize'
 FN_TAU    = 1e-3                         # s  (tau_target)
 FN_CUT_CFL_ABOVE_TC = True               # mask the CFL curve where T_nuc > T_CFL (gap vanishes above Tc)
 M_GRAV    = [1.0,  1.4]         # filled dots (+ M_max) — grav. mass
