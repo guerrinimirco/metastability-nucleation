@@ -81,7 +81,7 @@ class FilterConfig:
     # TOV backend for the M_max filter and the M-R replay: 'scipy' (trusted
     # reference) or 'fast' (numba, ~100x). The scan/replay already parallelise
     # over grid cells with joblib, so the fast solver is called serially here
-    # (tov_parallel=False) to avoid numba-threads x joblib-processes oversubscription.
+    # (compute_tov_sequence is single-threaded) to avoid numba-threads x joblib oversubscription.
     tov_backend: str = 'scipy'
 
 
@@ -280,7 +280,7 @@ def passes_cfl_filters(alpha, B4, Delta0, cfg: FilterConfig):
             EOSTable_for_TOV(P=P_ok[pos], epsilon=e_ok[pos], nB=n_ok[pos]),
             e_c_vec=cfg.e_c_vec_tov, add_crust_table='No',
             compute_baryonic_mass=True, compute_tidal=False, verbose=False,
-            backend=cfg.tov_backend, tov_parallel=False)
+            backend=cfg.tov_backend)
         _, M_max, _ = truncate_to_stable_branch(tov, verbose=False)
     except Exception:
         return False, np.nan, 'mmax'
@@ -328,7 +328,7 @@ def passes_unpaired_filters(alpha, B4, cfg: FilterConfig):
             EOSTable_for_TOV(P=P_ok[pos], epsilon=e_ok[pos], nB=n_ok[pos]),
             e_c_vec=cfg.e_c_vec_tov, add_crust_table='No',
             compute_baryonic_mass=True, compute_tidal=False, verbose=False,
-            backend=cfg.tov_backend, tov_parallel=False)
+            backend=cfg.tov_backend)
         _, M_max, _ = truncate_to_stable_branch(tov, verbose=False)
     except Exception:
         return False, np.nan, 'mmax'
@@ -362,7 +362,7 @@ def replay_cfl(alpha, B4, Delta0, cfg: FilterConfig, e_c_vec=None):
             EOSTable_for_TOV(P=P_ok[pos], epsilon=e_ok[pos], nB=n_ok[pos]),
             e_c_vec=e_c_vec, add_crust_table='No',
             compute_baryonic_mass=False, compute_tidal=False, verbose=False,
-            backend=cfg.tov_backend, tov_parallel=False)
+            backend=cfg.tov_backend)
     except Exception:
         return None
     if tov.shape[0] < 3:

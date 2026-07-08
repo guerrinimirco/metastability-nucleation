@@ -17,8 +17,7 @@
 # # Coexistence of strange quark stars and neutron stars: metastability and nucleation in proto-neutron stars
 #
 # Thermal nucleation of a deconfined quark droplet inside hot, dense hadronic
-# matter (proto-neutron star / merger remnant), for the 2-family / strange-quark
-# hypothesis.
+# matter (proto-neutron star), for the 2-family scenario under the absolutely stability of strange-quark-matter hypothesis.
 #
 # The notebook is organised in four parts:
 #
@@ -33,20 +32,15 @@
 #   surface tension at the PNS centre (IV.1–IV.3), the paper figures (IV.4) and
 #   the cross-method comparisons (IV.5).
 #
-# **Parts I, III and IV run without Part II** (they read the saved tables). Typical
-# session after the tables exist: run **I → III → IV**. "Run All" executes
-# top-to-bottom without errors (Part II then regenerates every table first).
+# **Parts I, III and IV run without Part II** (they read the saved tables). 
 #
-# Heavy numerics live in the installed packages: `nucleation.analysis`
-# (σ_crit engine, CFL filters, replay) and `nucleation.energy_barrier` /
-# `nucleation.general_nucleation` (Q\* solvers, barriers, rates); plot styling in
-# `nucleation.analysis.figure`. The notebook holds parameters, generation loops
+# Heavy numerics live in the installed packages. The notebook holds parameters, generation loops
 # and figures only.
 
 # %% [markdown]
 # # Part I — Setup & parameters
 #
-# *Always run.* Imports and all tunable knobs; no heavy computation here.
+# *Always run.* Imports and all tunable parameters; no heavy computation here.
 
 # %% [markdown]
 # ## I.1 — Imports & installs
@@ -56,18 +50,12 @@
 # `nucleation` packages locally (editable install) — repo edits then take effect
 # after a kernel restart only.
 #
-# > ⚠️ Running the GitHub `pip install` line **replaces** the editable install
-# > with a frozen copy, silently shadowing local repo edits. To restore:
-# > `pip install -e ../../nucleation --no-deps` and check that
-# > `import nucleation; nucleation.__file__` points into the repo.
 
 # %%
 import sys, os
 
-# ─── Install the two custom packages from GitHub (latest commit) ─────────────
+# ─── Install the packages from GitHub (latest commit) ─────────────
 # Comment these out and uncomment the local-path block when developing
-# the packages locally — edits in ../../eos or ../../nucleation then take
-# effect immediately without a re-install.
 # !{sys.executable} -m pip install --no-deps --force-reinstall git+https://github.com/guerrinimirco/eos.git --quiet
 print("eos package loaded successfully!")
 # !{sys.executable} -m pip install --no-deps --force-reinstall git+https://github.com/guerrinimirco/metastability-nucleation.git --quiet
@@ -194,8 +182,7 @@ def load_hadronic_tables(xsd_tag):
 n_sat = 0.1583   # fm^-3
 
 # ── Independent-variable grids for the EoS tables ────────────────────────────
-# n_B (baryon number density). 300 points, 0.1 → 12 × n_sat — covers from the
-#   crust edge up to ≳10 n_sat (well above any NS central density).
+# n_B (baryon number density). 300 points, 0.1 → 12 × n_sat — covers from the crust edge up to ≳10 n_sat.
 n_B_values = np.linspace(0.1, 12, 300) * n_sat                    # fm^-3
 
 # T (temperature). Two near-zero anchors + uniform 2 MeV up to 100 MeV
@@ -244,7 +231,7 @@ params = create_custom_parametrization(
     x_sigma_delta=x_sigma_delta,
     x_omega_delta=x_omega_delta,
     x_rho_delta=x_rho_delta,
-    name=f"2fam_phi_{xsd_tag}",       # ← derived from xsd_tag, not hardcoded
+    name=f"2fam_phi_{xsd_tag}",       
 )
 
 
@@ -269,8 +256,8 @@ params = create_custom_parametrization(
 # =============================================================================
 quark_param_sets = [
     dict(alpha=0.1*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
-    #dict(alpha=0.1*np.pi/2, B4=165.0, Delta0=180.0, m_s=100.0),
-    dict(alpha=0.1*np.pi/2, B4=170.0, Delta0=175.0, m_s=100.0),
+    dict(alpha=0.1*np.pi/2, B4=165.0, Delta0=180.0, m_s=100.0),
+    #dict(alpha=0.1*np.pi/2, B4=170.0, Delta0=175.0, m_s=100.0),
     dict(alpha=0.18*np.pi/2, B4=150.0, Delta0=126.0, m_s=100.0),  # marginalized posterior
     dict(alpha=0.08*np.pi/2, B4=158.0, Delta0=157.0, m_s=100.0)   # maximum posterior
 ]
