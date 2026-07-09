@@ -42,8 +42,13 @@ def set_paper_style():
     })
 
 
-def panel_label(ax, lab, corner='upper'):
-    """Put an (a)/(b)/... tag in a panel corner ('upper' or 'lower' left)."""
-    y, va = (0.945, 'top') if corner == 'upper' else (0.055, 'bottom')
-    ax.text(0.045, y, lab, transform=ax.transAxes,
-            fontweight='bold', va=va, ha='left')
+def panel_label(ax, lab, corner='upper left'):
+    """Put an (a)/(b)/... tag in a panel corner. `corner` is a vertical word
+    ('upper'/'lower') optionally followed by a horizontal one ('left'/'right');
+    horizontal defaults to 'left'. e.g. 'upper', 'lower right', 'upper right'."""
+    words = corner.split()
+    y, va = (0.945, 'top') if words[0] == 'upper' else (0.055, 'bottom')
+    right = len(words) > 1 and words[1] == 'right'
+    x, ha = (0.955, 'right') if right else (0.045, 'left')
+    ax.text(x, y, lab, transform=ax.transAxes,
+            fontweight='bold', va=va, ha=ha)

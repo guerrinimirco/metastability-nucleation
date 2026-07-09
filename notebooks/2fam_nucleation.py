@@ -1669,7 +1669,7 @@ add_observational_constraints(axA, CONTOUR_DIR, show_mass_bands=True,
                               inline_labels=True)  # NICER/HESS + mass bands
 axA.set_xlim(8, 16); axA.set_ylim(0.3, 2.8)                 # re-assert after fills
 axA.set_xlabel(r'$R$ [km]'); axA.set_ylabel(r'$M$ [$M_\odot$]')
-_grid(axA); panel_label(axA, '(a)')
+_grid(axA); panel_label(axA, '(a)', corner='lower right')
 
 # (b) M vs M_baryonic.  Carries the shared curve legend (NS / QS / PNS) for all panels.
 for _s in _F2SEQ:
@@ -1677,8 +1677,8 @@ for _s in _F2SEQ:
     axB.plot(_a[:, 5], _a[:, 4], color=_s['c'], lw=2.4, label=_s['lbl'])
 axB.set_xlabel(r'$M_B$ [$M_\odot$]'); axB.set_ylabel(r'$M$ [$M_\odot$]')
 axB.set_xlim(0.6, 3.4); axB.set_ylim(0.6, 2.6)
-axB.legend(loc='lower right', fontsize=10, frameon=False)
-_grid(axB); panel_label(axB, '(b)')
+axB.legend(loc='upper left', fontsize=10, frameon=False)
+_grid(axB); panel_label(axB, '(b)', corner='lower right')
 
 # (c) central temperature T_c vs baryonic mass M_B.  NS/QS are cold: drawn as a
 #     coloured T_c=0 horizontal line over their M_B span; the two PNS sequences
@@ -1698,7 +1698,7 @@ for _s in _F2SEQ:
     _mass_marks(axC, _a, _Tc, _s['c'], _s['cdot'], _s['cstar'])
 axC.set_xlabel(r'$M_B$ [$M_\odot$]'); axC.set_ylabel(r'$T_c$ [MeV]')
 axC.set_xlim(0.6, 3.4); axC.set_ylim(bottom=-1)
-_grid(axC); panel_label(axC, '(c)')
+_grid(axC); panel_label(axC, '(c)', corner='upper right')
 
 # (d) central density vs baryonic mass; every curve gets M-dot + M_max-star labels.
 for _s in _F2SEQ:
@@ -1707,42 +1707,10 @@ for _s in _F2SEQ:
     axD.plot(_a[:, 5], _y, color=_s['c'], lw=2.4)
     _mass_marks(axD, _a, _y, _s['c'], _s['ddot'], _s['dstar'])
 axD.set_xlabel(r'$M_B$ [$M_\odot$]'); axD.set_ylabel(r'$n_B^c/n_\mathrm{sat}$')
-axD.set_xlim(0.6, 3.4); _grid(axD); panel_label(axD, '(d)')
+axD.set_xlim(0.6, 3.4); _grid(axD); panel_label(axD, '(d)', corner='lower right')
 
 fig.savefig(f'../output/figures/paper_fig2_stellar_sequences_{xsd_tag}.pdf', bbox_inches='tight')
 plt.show()
-
-# %%
-# ---- Reference only: Q* pressure vs n_B^H across charge/flavor prescriptions ----
-#      saddlepoint {lcn, gcn, coulomb_minimize} + frozen lcn, for unpaired & CFL.
-#      (frozen has no CFL phase -> that combo is skipped.)
-_nBr = np.linspace(0.16, 1.2, 30)
-_REF = [('saddlepoint', 'lcn',              '#1f77b4', 'saddle / LCN'),
-        ('saddlepoint', 'gcn',              '#2ca02c', 'saddle / GCN'),
-        ('saddlepoint', 'coulomb_minimize', '#d62728', 'saddle / Coul-min'),
-        ('frozen',      'lcn',              '#9467bd', 'frozen / LCN')]
-_REF_PH = {'unpaired': '-', 'cfl': '--'}
-
-figR, axR = plt.subplots(figsize=(6.4, 5.0), constrained_layout=True)
-axR.plot(_nBr / n_sat, [float(H['trapped']['P'](_nB, F2C_YL, F2C_T)) for _nB in _nBr],
-         color='0.15', lw=2.6)
-for _flav, _chg, _col, _lbl in _REF:
-    for _ph, _ls in _REF_PH.items():
-        if _flav == 'frozen' and _ph == 'cfl':
-            continue
-        axR.plot(_nBr / n_sat, _qs_P(_nBr, _flav, _chg, _ph, _f2params, F2_SET['Delta0']),
-                 color=_col, ls=_ls, lw=1.8, alpha=(1.0 if _ls == '-' else 0.65))
-axR.set_xlabel(r'$n_B^H/n_\mathrm{sat}$'); axR.set_ylabel(r'$P$ [MeV/fm$^3$]')
-axR.set_title(rf'$Q^*$ pressure — $Y_L^H={F2C_YL}$, $T={F2C_T:.0f}$ MeV, '
-              rf'$\sigma={F2C_SIGMA:.0f}$ MeV/fm$^2$')
-axR.legend([Line2D([], [], color='0.15', lw=2.6)]
-           + [Line2D([], [], color=_c, lw=2) for _, _, _c, _ in _REF]
-           + [Line2D([], [], color='0.3', ls=_ls) for _ls in _REF_PH.values()],
-           ['H (trapped)'] + [_l for _, _, _, _l in _REF] + ['unpaired', 'CFL'],
-           fontsize=8, ncol=2, loc='upper left')
-figR.savefig(f'../output/figures/paper_fig2_Qstar_pressure_{xsd_tag}.pdf', bbox_inches='tight')
-plt.show()
-
 
 # %% [markdown]
 # ### Paper Figure 6 — $T_{\rm nuc}(n_B^H)$ nucleation conditions

@@ -22,7 +22,7 @@ MR_LABEL_FS = 10          # match the J0952-0607 mass-band label
 MR_CONSTRAINTS = {
     "J0030": ("PSR J0030+0451", STANDARD_COLORS['Orange'],  (0.0,  -0.1, 'center',  'center')),     
     "J0740": ("PSR J0740+6620", STANDARD_COLORS['Blue'],    (0.0,  0.0, 'center', 'center')),
-    "J0614": ("PSR J0614-3329", STANDARD_COLORS['Green'],   (-0.1, -0.1, 'center', 'center')),     
+    "J0614": ("PSR J0614-3329", STANDARD_COLORS['Green'],   (-0.3, 0.0, 'center', 'center')),     
     "HESS":  ("HESS J1731-347", STANDARD_COLORS['Magenta'], (0.0, -0.2, 'center', 'center')),
 }
 # 1D mass-only measurements -> horizontal bands. Only J0952-0607 is shown as a
