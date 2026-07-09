@@ -15,10 +15,14 @@ from .style import STANDARD_COLORS
 # 2D M-R posteriors: CSV basename -> (full label, colour, label-anchor).
 # Soft fills (no border) so they read as background; anchor = (dx, dy, ha, va)
 # offsets the inline label from the blob centroid [data units] -- tune to taste.
+# anchor = (dx, dy, ha, va): dx/dy shift the label from the blob centroid in
+# DATA units (dx in km, dy in M_sun); ha/va are its text alignment. dy>0 + 'bottom'
+# = above the blob, dy<0 + 'top' = below it. MR_LABEL_FS sets the font size.
+MR_LABEL_FS = 10          # match the J0952-0607 mass-band label
 MR_CONSTRAINTS = {
-    "J0030": ("PSR J0030+0451", STANDARD_COLORS['Orange'],  (0.6,  0.20, 'left',   'bottom')),
+    "J0030": ("PSR J0030+0451", STANDARD_COLORS['Orange'],  (0.6,  -0.20, 'left',   'top')),     
     "J0740": ("PSR J0740+6620", STANDARD_COLORS['Blue'],    (0.0,  0.16, 'center', 'bottom')),
-    "J0614": ("PSR J0614-3329", STANDARD_COLORS['Green'],   (-0.35, 0.32, 'center', 'bottom')),
+    "J0614": ("PSR J0614-3329", STANDARD_COLORS['Green'],   (-0.35, -0.20, 'center', 'top')),     
     "HESS":  ("HESS J1731-347", STANDARD_COLORS['Magenta'], (0.0, -0.13, 'center', 'top')),
 }
 # 1D mass-only measurements -> horizontal bands. Only J0952-0607 is shown as a
@@ -77,7 +81,7 @@ def add_observational_constraints(ax, contour_dir, show_mass_bands=True,
             if anchor is not None:                    # label once per source
                 dx, dy, ha, va = anchor
                 ax.text(Rc.mean() + dx, Mc.mean() + dy, label, color=colour,
-                        fontsize=11, fontweight='bold', ha=ha, va=va, zorder=3,
+                        fontsize=MR_LABEL_FS, fontweight='bold', ha=ha, va=va, zorder=3,
                         clip_on=True)
         else:                                         # legend path: draw boundary
             ax.plot(Rc, Mc, color=colour, lw=1.2, zorder=1, label=label)
