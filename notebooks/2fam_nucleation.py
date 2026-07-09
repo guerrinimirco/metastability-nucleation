@@ -1655,22 +1655,6 @@ def _grid(ax):
     pass
 
 
-def _qs_P(nB_arr, flavor, charge, phase, params, Delta0,
-          YL=F2C_YL, T=F2C_T, sigma=F2C_SIGMA):
-    """Q* droplet total pressure P_total(n_B^H) for one (flavor, charge, phase, set)."""
-    kw = dict(quark_phase=phase, Delta0=Delta0,
-              include_photons=True, include_gluons=True, include_thermal_neutrinos=True)
-    if charge == 'coulomb_minimize':
-        kw['sigma'] = sigma                       # required by the coulomb_minimize solver
-    solver = get_solver_Qs(flavor, charge, params, **kw)
-    P = np.full(nB_arr.shape, np.nan)
-    for _i, _nB in enumerate(nB_arr):
-        _out = solver(nuc_an.hadronic_point(H['trapped'], _nB, YL, T))
-        _Qs = _out[0] if isinstance(_out, tuple) else _out
-        if _Qs is not None:
-            P[_i] = getattr(_Qs, 'P_total', np.nan)
-    return P
-
 
 fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(9.5, 9.0),
                                              constrained_layout=True)
