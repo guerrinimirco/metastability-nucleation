@@ -945,8 +945,17 @@ print(f"Loaded {len(nuc_sets)} trapped nucleation tables.")
 # =============================================================================
 
 # ---- user-configurable inputs ----------------------------------------------
-# Star match (Y_L, S) and CFL-filter acceptance constants.
-YLH, S       = 0.25, 2.0        # trapped/isentropic PNS the σ_crit is evaluated at
+# PNS evolution snapshots the paper is evaluated at (reused by Figs 2, 6, 7).
+# Two representative times along the proto-NS deleptonization/cooling track:
+#   t_0     (just after formation): Y_L^H = 0.35, S = 1.5  (lepton-rich, cooler)
+#   t_Tmax  (temperature peak):     Y_L^H = 0.25, S = 2.0  (deleptonized, hottest)
+# Colours: orange = t_0, red = t_Tmax.  Single source of truth — change here only.
+PNS_T0   = dict(YLH=0.35, S=1.5, color='#fd8d3c', lbl=r'$t_0$')
+PNS_TMAX = dict(YLH=0.25, S=2.0, color='#e31a1c', lbl=r'$t_{T_\mathrm{max}}$')
+
+# Star match (Y_L, S) and CFL-filter acceptance constants.  sigma_crit is
+# evaluated at t_Tmax (hottest -> hardest to nucleate -> most conservative).
+YLH, S       = PNS_TMAX['YLH'], PNS_TMAX['S']   # trapped/isentropic PNS the σ_crit is evaluated at
 sig_lo, sig_hi = 0.001, 300.0     # σ scan range for the brentq root-find [MeV/fm^2]
 m_s_fixed    = 100.0            # strange-quark mass in the CFL filter [MeV]
 n_B_grid_cfl = np.linspace(0.05, 2.5, 250)                      # fm^-3
@@ -1278,144 +1287,146 @@ set_paper_style()      # publication rcParams (nucleation.analysis.figure.style)
 # ============================================================================
 #  Figure 1.  Knobs -> which set / method / fixed values.
 # ============================================================================
-F1_SET    = quark_param_sets[0]                 # which (alpha, B4, Delta0) set
-F1_FLAVOR = 'saddlepoint'                        # 'frozen' | 'saddlepoint'
-F1_CHARGE = 'coulomb_minimize'                   # 'lcn' | 'gcn' | 'coulomb_minimize'
-F1_YLH    = 0.25
-F1_SIGMA  = 100.0
-F1_TW     = 30.0                                 # panel (a) temperature [MeV]
-F1_DENS   = [1.0, 3, 7]                      # panel (a) n_B^H / n_0
-F1_TEMPS  = [10.0, 20.0, 30.0, 40.0, 50.0]       # panels (b,c,d) temperatures [MeV]
+# One figure per quark parametrization. Reverse order so set[0]'s helper
+# bindings (_params, _f1_get, _ref, ...) persist for the sigma-sweep cell below.
+for F1_SET in quark_param_sets[::-1]:
+    F1_FLAVOR = 'saddlepoint'                        # 'frozen' | 'saddlepoint'
+    F1_CHARGE = 'coulomb_minimize'                   # 'lcn' | 'gcn' | 'coulomb_minimize'
+    F1_YLH    = 0.25
+    F1_SIGMA  = 100.0
+    F1_TW     = 30.0                                 # panel (a) temperature [MeV]
+    F1_DENS   = [1.0, 3, 7]                      # panel (a) n_B^H / n_0
+    F1_TEMPS  = [10.0, 20.0, 30.0, 40.0, 50.0]       # panels (b,c,d) temperatures [MeV]
 
-_PHASE_LS    = {'unpCFL': '-', 'cfl': '--', 'unpaired': ':'}   # line style per phase
-_PHASE_FILL  = {'unpCFL': True, 'cfl': False, 'unpaired': False}
-_PHASE_LBL   = {'unpCFL': 'unpCFL', 'cfl': 'CFL', 'unpaired': 'unpaired'}
-_PHASE_LW    = {'unpCFL': 2.6, 'cfl': 1.7, 'unpaired': 1.7}    # solid (unpCFL) drawn thicker
-_PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.55}   # fade dashed/dotted phases
+    _PHASE_LS    = {'unpCFL': '-', 'cfl': '--', 'unpaired': ':'}   # line style per phase
+    _PHASE_FILL  = {'unpCFL': True, 'cfl': False, 'unpaired': False}
+    _PHASE_LBL   = {'unpCFL': 'unpCFL', 'cfl': 'CFL', 'unpaired': 'unpaired'}
+    _PHASE_LW    = {'unpCFL': 2.6, 'cfl': 1.7, 'unpaired': 1.7}    # solid (unpCFL) drawn thicker
+    _PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.55}   # fade dashed/dotted phases
 
-_stag   = q_tag_of(F1_SET)
-_params = get_alphabag_custom(alpha=F1_SET['alpha'], B4=F1_SET['B4'], m_s=F1_SET['m_s'])
-
-
-def _f1_get(phase, sg=F1_SIGMA):
-    """nuc_sets table for this method/phase/set/sigma (or None)."""
-    return nuc_sets.get(f"Htrapped_{F1_FLAVOR}_{F1_CHARGE}_{phase}_{_stag}_s{int(sg)}")
+    _stag   = q_tag_of(F1_SET)
+    _params = get_alphabag_custom(alpha=F1_SET['alpha'], B4=F1_SET['B4'], m_s=F1_SET['m_s'])
 
 
-def _f1_Rx(T):
-    """unpCFL crossover radius R_x(T) = hc/Delta(T) — same CFL gap as the EoS
-    (Tc = T_critical(Delta0)); delegate to the engine so they never diverge."""
-    return float(nuc_an.crossover_radius(T, F1_SET['Delta0']))
+    def _f1_get(phase, sg=F1_SIGMA):
+        """nuc_sets table for this method/phase/set/sigma (or None)."""
+        return nuc_sets.get(f"Htrapped_{F1_FLAVOR}_{F1_CHARGE}_{phase}_{_stag}_s{int(sg)}")
 
 
-_ref = _f1_get('unpCFL')
-_nBg = _ref.hadronic_grids['n_B_H']
-_Tg  = _ref.hadronic_grids['T']
-_iYL = int(np.argmin(np.abs(_ref.hadronic_grids['Y_L_H'] - F1_YLH)))
-_YLused = _ref.hadronic_grids['Y_L_H'][_iYL]
+    def _f1_Rx(T):
+        """unpCFL crossover radius R_x(T) = hc/Delta(T) — same CFL gap as the EoS
+        (Tc = T_critical(Delta0)); delegate to the engine so they never diverge."""
+        return float(nuc_an.crossover_radius(T, F1_SET['Delta0']))
 
 
-def _iT(T):
-    return int(np.argmin(np.abs(_Tg - T)))
+    _ref = _f1_get('unpCFL')
+    _nBg = _ref.hadronic_grids['n_B_H']
+    _Tg  = _ref.hadronic_grids['T']
+    _iYL = int(np.argmin(np.abs(_ref.hadronic_grids['Y_L_H'] - F1_YLH)))
+    _YLused = _ref.hadronic_grids['Y_L_H'][_iYL]
 
 
-fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(9.5, 9.0),
-                                             constrained_layout=True)
-
-# ---- (a) W(R): density = colour, phase = line style ----
-_cA = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1_DENS)))
-_Rg = np.linspace(0.01, 14.0, 400)
-_Wmax = 0.0
-for _ci, _x in enumerate(F1_DENS):
-    for _ph, _ls in _PHASE_LS.items():
-        _eb = compute_energy_barrier(
-            H['trapped'], _x * n_sat, F1_TW, F1_SIGMA,
-            electric_charge_mode=F1_CHARGE, params=_params, flavor_mode=F1_FLAVOR,
-            quark_phase=_ph, Delta0=F1_SET['Delta0'], Y_L_H=F1_YLH, R_values=_Rg,
-            switching_mode='step', Rx=(_f1_Rx(F1_TW) if _ph == 'unpCFL' else None))
-        axA.plot(_Rg, _eb.W, color=_cA[_ci], ls=_ls,
-                 lw=_PHASE_LW[_ph], alpha=_PHASE_ALPHA[_ph])
-        if np.isfinite(_eb.W).any():
-            _k = int(np.nanargmax(_eb.W))
-            if _ph != 'unpaired':                                   # no marker on unpaired
-                axA.plot(_Rg[_k], _eb.W[_k], 'o', ms=6, color=_cA[_ci], mec=_cA[_ci],
-                         mfc=(_cA[_ci] if _PHASE_FILL[_ph] else 'white'), zorder=5)
-            _Wmax = max(_Wmax, float(_eb.W[_k]))
-# shade R <= R_Delta (unpCFL->CFL crossover radius R_x at this T)
-_Rdelta = _f1_Rx(F1_TW)
-if np.isfinite(_Rdelta):
-    axA.axvspan(0, _Rdelta, color='tab:blue', alpha=0.07, zorder=0)
-axA.axhline(0, color='0.6', lw=0.7, zorder=0)
-axA.set_xlim(0, 8); axA.set_ylim(-0.2 * _Wmax, 1.18 * _Wmax)
-axA.set_xlabel(r'$R$ [fm]'); axA.set_ylabel(r'$W$ [MeV]')
-axA.set_title(rf'$Y_L^H={F1_YLH}$, $T={F1_TW:.0f}$ MeV, '
-              rf'$\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
-panel_label(axA, '(a)', corner='lower')
-_lgA = axA.legend([Line2D([], [], color=_cA[i], lw=2) for i in range(len(F1_DENS))],
-                  [rf'$n_B^H/n_\mathrm{{sat}}={int(x)}$' for x in F1_DENS], loc='upper left')
-axA.add_artist(_lgA)
-# phase legend in the opposite (also empty) top corner -> no overlap with density legend or peak
-axA.legend([Line2D([], [], color='0.3', ls=_PHASE_LS[p]) for p in _PHASE_LS],
-           [_PHASE_LBL[p] for p in _PHASE_LS], loc='upper right')
-
-# ---- (b,c,d) vs n_B^H/n_0: temperature = colour, phase = line style ----
-_cT = plt.cm.plasma(np.linspace(0.05, 0.85, len(F1_TEMPS)))
+    def _iT(T):
+        return int(np.argmin(np.abs(_Tg - T)))
 
 
-def _f1_vs_nBH(ax, getter, ylabel, logy=False):
-    for _ti, _T in enumerate(F1_TEMPS):
+    fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(9.5, 9.0),
+                                                 constrained_layout=True)
+
+    # ---- (a) W(R): density = colour, phase = line style ----
+    _cA = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1_DENS)))
+    _Rg = np.linspace(0.01, 14.0, 400)
+    _Wmax = 0.0
+    for _ci, _x in enumerate(F1_DENS):
+        for _ph, _ls in _PHASE_LS.items():
+            _eb = compute_energy_barrier(
+                H['trapped'], _x * n_sat, F1_TW, F1_SIGMA,
+                electric_charge_mode=F1_CHARGE, params=_params, flavor_mode=F1_FLAVOR,
+                quark_phase=_ph, Delta0=F1_SET['Delta0'], Y_L_H=F1_YLH, R_values=_Rg,
+                switching_mode='step', Rx=(_f1_Rx(F1_TW) if _ph == 'unpCFL' else None))
+            axA.plot(_Rg, _eb.W, color=_cA[_ci], ls=_ls,
+                     lw=_PHASE_LW[_ph], alpha=_PHASE_ALPHA[_ph])
+            if np.isfinite(_eb.W).any():
+                _k = int(np.nanargmax(_eb.W))
+                if _ph != 'unpaired':                                   # no marker on unpaired
+                    axA.plot(_Rg[_k], _eb.W[_k], 'o', ms=6, color=_cA[_ci], mec=_cA[_ci],
+                             mfc=(_cA[_ci] if _PHASE_FILL[_ph] else 'white'), zorder=5)
+                _Wmax = max(_Wmax, float(_eb.W[_k]))
+    # shade R <= R_Delta (unpCFL->CFL crossover radius R_x at this T)
+    _Rdelta = _f1_Rx(F1_TW)
+    if np.isfinite(_Rdelta):
+        axA.axvspan(0, _Rdelta, color='tab:blue', alpha=0.07, zorder=0)
+    axA.axhline(0, color='0.6', lw=0.7, zorder=0)
+    axA.set_xlim(0, 8); axA.set_ylim(-0.2 * _Wmax, 1.18 * _Wmax)
+    axA.set_xlabel(r'$R$ [fm]'); axA.set_ylabel(r'$W$ [MeV]')
+    axA.set_title(rf'$Y_L^H={F1_YLH}$, $T={F1_TW:.0f}$ MeV, '
+                  rf'$\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
+    panel_label(axA, '(a)', corner='lower')
+    _lgA = axA.legend([Line2D([], [], color=_cA[i], lw=2) for i in range(len(F1_DENS))],
+                      [rf'$n_B^H/n_\mathrm{{sat}}={int(x)}$' for x in F1_DENS], loc='upper left')
+    axA.add_artist(_lgA)
+    # phase legend in the opposite (also empty) top corner -> no overlap with density legend or peak
+    axA.legend([Line2D([], [], color='0.3', ls=_PHASE_LS[p]) for p in _PHASE_LS],
+               [_PHASE_LBL[p] for p in _PHASE_LS], loc='upper right')
+
+    # ---- (b,c,d) vs n_B^H/n_0: temperature = colour, phase = line style ----
+    _cT = plt.cm.plasma(np.linspace(0.05, 0.85, len(F1_TEMPS)))
+
+
+    def _f1_vs_nBH(ax, getter, ylabel, logy=False):
+        for _ti, _T in enumerate(F1_TEMPS):
+            for _ph, _ls in _PHASE_LS.items():
+                _o = _f1_get(_ph)
+                if _o is None:
+                    continue
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    ax.plot(_nBg / n_sat, getter(_o, _iT(_T)), color=_cT[_ti], ls=_ls,
+                            lw=_PHASE_LW[_ph], alpha=_PHASE_ALPHA[_ph])
+        ax.set_xlabel(r'$n_B^H/n_\mathrm{sat}$'); ax.set_ylabel(ylabel); ax.set_xlim(0.5, 10)
+        if logy:
+            ax.set_yscale('log')
+
+
+    _f1_vs_nBH(axB, lambda o, it: o.R_c[:, _iYL, it], r'$R_*$ [fm]')
+    axB.set_ylim(1, 8); axB.set_title(rf'$Y_L^H={F1_YLH}$, $\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
+    panel_label(axB, '(b)', corner='lower')
+    axB.legend([Line2D([], [], color=_cT[i], lw=2) for i in range(len(F1_TEMPS))],
+               [rf'$T={int(T)}\,\,\rm MeV$' for T in F1_TEMPS], loc='upper right')
+
+    _f1_vs_nBH(axC, lambda o, it: o.W_c[:, _iYL, it] / _Tg[it], r'$W_*/T$')
+    axC.set_ylim(0, 500); axC.set_title(rf'$Y_L^H={F1_YLH}$, $\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
+    panel_label(axC, '(c)', corner='lower')
+
+    _f1_vs_nBH(axD, lambda o, it: np.log10(o.tau[:, _iYL, it]), r'$\log_{10}\,\tau$ [s]')
+    axD.axhline(np.log10(1e-3), color='k', ls=(0, (1, 1)), lw=0.9)   # tau = 1 ms
+    axD.set_ylim(-60, 60); axD.set_title(rf'$Y_L^H={F1_YLH}$, $\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
+    panel_label(axD, '(d)', corner='lower')
+
+    fig.savefig(f'../output/figures/paper_fig1_barrier_{xsd_tag}_{_stag}.pdf', bbox_inches='tight')
+    plt.show()
+
+    # ---- Alternative panel (d): log10 tau vs T (density = colour, phase = style).
+    #      Both x-axis choices are produced; pick whichever reads better for the paper.
+    figD, axDt = plt.subplots(figsize=(5.2, 4.6), constrained_layout=True)
+    for _ci, _x in enumerate(F1_DENS):
+        _i = int(np.argmin(np.abs(_nBg / n_sat - _x)))
         for _ph, _ls in _PHASE_LS.items():
             _o = _f1_get(_ph)
             if _o is None:
                 continue
             with np.errstate(divide='ignore', invalid='ignore'):
-                ax.plot(_nBg / n_sat, getter(_o, _iT(_T)), color=_cT[_ti], ls=_ls,
-                        lw=_PHASE_LW[_ph], alpha=_PHASE_ALPHA[_ph])
-    ax.set_xlabel(r'$n_B^H/n_\mathrm{sat}$'); ax.set_ylabel(ylabel); ax.set_xlim(0.5, 10)
-    if logy:
-        ax.set_yscale('log')
-
-
-_f1_vs_nBH(axB, lambda o, it: o.R_c[:, _iYL, it], r'$R_*$ [fm]')
-axB.set_ylim(1, 8); axB.set_title(rf'$Y_L^H={F1_YLH}$, $\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
-panel_label(axB, '(b)', corner='lower')
-axB.legend([Line2D([], [], color=_cT[i], lw=2) for i in range(len(F1_TEMPS))],
-           [rf'$T={int(T)}\,\,\rm MeV$' for T in F1_TEMPS], loc='upper right')
-
-_f1_vs_nBH(axC, lambda o, it: o.W_c[:, _iYL, it] / _Tg[it], r'$W_*/T$')
-axC.set_ylim(0, 500); axC.set_title(rf'$Y_L^H={F1_YLH}$, $\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
-panel_label(axC, '(c)', corner='lower')
-
-_f1_vs_nBH(axD, lambda o, it: np.log10(o.tau[:, _iYL, it]), r'$\log_{10}\,\tau$ [s]')
-axD.axhline(np.log10(1e-3), color='k', ls=(0, (1, 1)), lw=0.9)   # tau = 1 ms
-axD.set_ylim(-60, 60); axD.set_title(rf'$Y_L^H={F1_YLH}$, $\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
-panel_label(axD, '(d)', corner='lower')
-
-fig.savefig(f'../output/figures/paper_fig1_barrier_{xsd_tag}.pdf', bbox_inches='tight')
-plt.show()
-
-# ---- Alternative panel (d): log10 tau vs T (density = colour, phase = style).
-#      Both x-axis choices are produced; pick whichever reads better for the paper.
-figD, axDt = plt.subplots(figsize=(5.2, 4.6), constrained_layout=True)
-for _ci, _x in enumerate(F1_DENS):
-    _i = int(np.argmin(np.abs(_nBg / n_sat - _x)))
-    for _ph, _ls in _PHASE_LS.items():
-        _o = _f1_get(_ph)
-        if _o is None:
-            continue
-        with np.errstate(divide='ignore', invalid='ignore'):
-            axDt.plot(_Tg, np.log10(_o.tau[_i, _iYL, :]), color=_cA[_ci], ls=_ls,
-                      lw=_PHASE_LW[_ph], alpha=_PHASE_ALPHA[_ph])
-axDt.axhline(np.log10(1e-3), color='k', ls=(0, (1, 1)), lw=0.9)
-axDt.set_xlabel(r'$T$ [MeV]'); axDt.set_ylabel(r'$\log_{10}\,\tau$ [s]')
-axDt.set_xlim(0, 80); axDt.set_ylim(-60, 60)
-axDt.set_title(rf'$Y_L^H={F1_YLH}$, $\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
-axDt.legend([Line2D([], [], color=_cA[i], lw=2) for i in range(len(F1_DENS))]
-            + [Line2D([], [], color='0.3', ls=_PHASE_LS[p]) for p in _PHASE_LS],
-            [rf'$n_B^H/n_\mathrm{{sat}}={int(x)}$' for x in F1_DENS] + [_PHASE_LBL[p] for p in _PHASE_LS],
-            loc='upper right', ncol=2)
-figD.savefig(f'../output/figures/paper_fig1d_tau_vs_T_{xsd_tag}.pdf', bbox_inches='tight')
-plt.show()
+                axDt.plot(_Tg, np.log10(_o.tau[_i, _iYL, :]), color=_cA[_ci], ls=_ls,
+                          lw=_PHASE_LW[_ph], alpha=_PHASE_ALPHA[_ph])
+    axDt.axhline(np.log10(1e-3), color='k', ls=(0, (1, 1)), lw=0.9)
+    axDt.set_xlabel(r'$T$ [MeV]'); axDt.set_ylabel(r'$\log_{10}\,\tau$ [s]')
+    axDt.set_xlim(0, 80); axDt.set_ylim(-60, 60)
+    axDt.set_title(rf'$Y_L^H={F1_YLH}$, $\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
+    axDt.legend([Line2D([], [], color=_cA[i], lw=2) for i in range(len(F1_DENS))]
+                + [Line2D([], [], color='0.3', ls=_PHASE_LS[p]) for p in _PHASE_LS],
+                [rf'$n_B^H/n_\mathrm{{sat}}={int(x)}$' for x in F1_DENS] + [_PHASE_LBL[p] for p in _PHASE_LS],
+                loc='upper right', ncol=2)
+    figD.savefig(f'../output/figures/paper_fig1d_tau_vs_T_{xsd_tag}_{_stag}.pdf', bbox_inches='tight')
+    plt.show()
 
 
 # %% [markdown]
@@ -1580,14 +1591,16 @@ for _i, (_p, _st) in enumerate(_qs_tov):
         cdot=(-13, 13, 'center', 'bottom'), cstar=(-13, 13, 'center', 'bottom'),  # ~45 deg CCW arrows
         ddot=(0, -9, 'center', 'top'),   dstar=(7, 0, 'left', 'center')))
 _F2SEQ += [
-    dict(arr=tov_trapped[(0.35, 1.5)], c='#fd8d3c', lbl=r'PNS ($t_0$)', yls=(0.35, 1.5),
+    dict(arr=tov_trapped[(PNS_T0['YLH'], PNS_T0['S'])], c=PNS_T0['color'],
+         lbl=r'PNS ($t_0$)', yls=(PNS_T0['YLH'], PNS_T0['S']),
          a=(0.92,  0.35, -0.02, 'left',  'top'),
          b=(0.92,  0.05, -0.10, 'left',  'top'),
          pc=(0.6,  0.02, -1.8,  'left',  'top'),
          d=(0.5,   0.03, -0.5,  'left',  'top'),
          cdot=(0, -9, 'center', 'top'),   cstar=(8, -3, 'left', 'top'),
          ddot=(8, -1, 'left', 'top'),     dstar=(7, -2, 'left', 'top')),
-    dict(arr=tov_trapped[(0.25, 2.0)], c='#e31a1c', lbl=r'PNS ($t_{T_\mathrm{max}}$)', yls=(0.25, 2.0),
+    dict(arr=tov_trapped[(PNS_TMAX['YLH'], PNS_TMAX['S'])], c=PNS_TMAX['color'],
+         lbl=r'PNS ($t_{T_\mathrm{max}}$)', yls=(PNS_TMAX['YLH'], PNS_TMAX['S']),
          a=(0.85, -0.35, 0.10, 'right', 'bottom'),
          b=(0.72, -0.05, 0.06, 'right', 'bottom'),
          pc=(0.55, 0.02, 1.5,  'left',  'bottom'),
@@ -1715,45 +1728,46 @@ plt.show()
 # %% [markdown]
 # ### Paper Figure 6 — $T_{\rm nuc}(n_B^H)$ nucleation conditions
 #
-# $\tau=\tau_{\rm target}$ curves in $(n_B^H, T)$, one line per $\sigma$ (colour)
-# and phase (line style). Black = stellar isentrope; dots on it mark the PNS
-# central density (filled: fixed $M$; open: $M_b$-matched to a cold star).
-# **(a)** $S=1, Y_L=0.35$   **(b)** $S=2, Y_L=0.25$.
+# One figure per quark parametrization. $\tau=\tau_{\rm target}$ curves in
+# $(n_B^H, T)$, one line per $\sigma$ (colour) and phase (line style). The
+# stellar isentrope is drawn in the snapshot colour (orange $t_0$, red
+# $t_{T_\mathrm{max}}$); markers on it mark the PNS central density (filled +
+# labelled: fixed $M=1,1.2,1.4,1.6$, star = $M_{\max}$; open: $M_b$-matched to a
+# cold star). **(a)** $t_0$: $Y_L^H=0.35,\,S=1.5$   **(b)** $t_{T_\mathrm{max}}$: $Y_L^H=0.25,\,S=2$.
 
 # %%
 # ============================================================================
-#  Figure 6.  T_nuc(n_B) nucleation-condition curves — two (Y_L, S) panels.
+#  Figure 6.  T_nuc(n_B^H) nucleation-condition curves — ONE figure per quark set.
+#    Two panels: (a) t_0 (Y_L^H=0.35, S=1.5),  (b) t_Tmax (Y_L^H=0.25, S=2.0).
 #    colour = sigma;  line style: unpaired ':', CFL '--', unpCFL '-'.
-#    red dash-dot = stellar isentrope T(n_B) at (Y_L, S).
-#    Dots ON the isentrope mark the PNS central density n_Bc:
-#      filled = PNS(Y_L,S) at gravitational mass M = 1,1.3,1.4,1.5, M_max;
-#      open   = PNS(Y_L,S) whose baryonic mass = Mb of a COLD (T=0) star with
-#               M(T0) = 1,1.3,1.4,1.5  (the same star, hot proto-NS vs cold).
+#    isentrope T(n_B^H) dash-dot in the snapshot colour (orange t_0, red t_Tmax).
+#    Markers ON the isentrope mark the PNS central density n_Bc (Fig-2 c/d style):
+#      filled dot + label = PNS at grav. mass M = 1,1.2,1.4,1.6 (+ filled star = M_max);
+#      open   dot         = PNS whose baryonic mass = Mb of a COLD (T=0) star with
+#                           the same M(T0)          (+ open star = cold M_max, if on branch).
 # ============================================================================
 set_paper_style()
 
 # ---- knobs ----
-FN_SET    = quark_param_sets[0]          # quark parametrization
 FN_FLAVOR = 'saddlepoint'
 FN_CHARGE = 'coulomb_minimize'
 FN_TAU    = 1e-3                         # s  (tau_target)
 FN_CUT_CFL_ABOVE_TC = True               # mask the CFL curve where T_nuc > T_CFL (gap vanishes above Tc)
-M_GRAV    = [1.0,  1.4]         # filled dots (+ M_max) — grav. mass
-M_COLD    = [1.0, 1.4]         # open dots — cold-star grav. mass, Mb-matched
-_tag = q_tag_of(FN_SET)
 from eos.alphabag.thermodynamics_quarks import T_critical   # same Tc as the CFL EoS gap
-_T_CFL = float(T_critical(FN_SET['Delta0']))   # CFL Tc = 0.57*2^(1/3)*Delta0 [MeV] (matches gap_cfl)
 
-_panels   = [dict(YL=0.35, S=1.0, lab='(a)'),    # left
-             dict(YL=0.25, S=2.0, lab='(b)')]    # right
-_phase_ls = [('unpaired', ':'), ('cfl', '--'), ('unpCFL', '-')]
-
+# Phase line styling — SAME convention as Figure 1: unpCFL solid+thick, the other
+# two thinner and faded (unpCFL drawn last -> on top).  Order = draw order.
+_PHASE_LS    = {'unpaired': ':', 'cfl': '--', 'unpCFL': '-'}
+_PHASE_LW    = {'unpCFL': 2.6, 'cfl': 1.7, 'unpaired': 1.7}
+_PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.55}
+_PHASE_LBL   = {'unpaired': 'unpaired', 'cfl': 'CFL', 'unpCFL': 'unpCFL'}
 # sigma -> colour (viridis over the available sigma_list)
 _sig_col = {sg: mpl.cm.viridis(t) for sg, t in
             zip(sigma_list, np.linspace(0.15, 0.85, len(sigma_list)))}
 
 # TOV columns: 0=e_c 1=P_c 2=n_Bc 3=R 4=M 5=Mb.
 _NBC, _M, _MB = 2, 4, 5
+_MDOTS_F6 = (1.0, 1.2, 1.4, 1.6)         # grav. masses [M_sun] marked on the isentrope
 
 def _branch_interp(arr, xcol, ycol):
     """interp ycol(xcol) along a TOV sequence's stable branch (up to M_max)."""
@@ -1766,81 +1780,117 @@ def _tov_trapped_seq(YL, S):
     key = min(tov_trapped, key=lambda k: abs(k[0] - YL) + abs(k[1] - S))
     return tov_trapped[key]
 
-fig, axes = plt.subplots(1, 2, figsize=(9, 4.6), sharey=True)
-for ax, pan in zip(axes, _panels):
-    YL, S = pan['YL'], pan['S']
-    YL_used = None
-    for sg in sigma_list:
-        for ph, ls in _phase_ls:
-            stem = f"Htrapped_{FN_FLAVOR}_{FN_CHARGE}_{ph}_{_tag}_s{int(sg)}"
-            if stem not in nuc_sets:
-                continue
-            grids   = nuc_sets[stem].hadronic_grids
-            iYL     = int(np.argmin(np.abs(grids['Y_L_H'] - YL)))
-            YL_used = grids['Y_L_H'][iYL]
-            res = compute_nucleation_density(nuc_sets[stem],
-                                             tau_target=FN_TAU, scan='n_B')
-            nB, T = nucleation_curve(res, iYL)
-            m = np.isfinite(nB) & np.isfinite(T)
-            if FN_CUT_CFL_ABOVE_TC and ph == 'cfl':
-                m &= (T <= _T_CFL)                    # CFL undefined above Tc -> drop those points
-            if m.any():
-                ax.plot(nB[m] / n_sat, T[m], color=_sig_col[sg], ls=ls, lw=1.6)
+def _mark_pair(ax, pts, label, color, dy=5.0):
+    """One value label plus a short arrow to EACH marker in pts — the solid
+    (fixed-M) and white-filled (M_b-matched) rendering of the same star. Both
+    arrows start at the SAME anchor (xt, yt), `dy` MeV above the higher marker;
+    the text is drawn separately so it never shifts an arrow's tail. nan skipped."""
+    pts = [(x, y) for x, y in pts if np.isfinite(x) and np.isfinite(y)]
+    if not pts:
+        return
+    xt = float(np.mean([p[0] for p in pts]))
+    yt = max(p[1] for p in pts) + dy
+    ax.text(xt, yt, label, ha='center', va='bottom', fontsize=8.5,
+            color=color, zorder=8)
+    _arw = dict(arrowstyle='->', color=color, lw=0.6, shrinkA=2, shrinkB=3,
+                mutation_scale=6)                     # small heads, common tail
+    for p in pts:
+        ax.annotate('', xy=p, xytext=(xt, yt), textcoords='data', arrowprops=_arw)
 
-    ax.set_xlim(0.5, 12); ax.set_ylim(0, 100)     # T [MeV], n_B^H/n_sat
 
-    # ---- isentrope + PNS central-density markers (on the isentrope) ----
-    YL_iso = YL if YL_used is None else float(YL_used)
-    T_iso  = lambda nBc: H['iso_trapped']['T'](nBc, YL_iso, S)   # T at a density
+def _iso_markers(ax, tov_tr, T_iso, color):
+    """PNS central-density markers on the isentrope, Fig-2 (c/d) styling (ms).
+    For each grav mass M in _MDOTS_F6: a SOLID dot at the fixed-M PNS density and a
+    WHITE-filled dot (same size) at the density where the PNS baryonic mass equals
+    M_b of the COLD (T=0) star of the same M(T0); one value label arrows to both.
+    Stars mark M_max: solid = trapped tip, white = cold M_max (M_b-matched)."""
+    nBc_M     = _branch_interp(tov_tr, _M, _NBC)      # trapped: M_grav -> n_Bc
+    Mb_of_M   = _branch_interp(tov_cold, _M, _MB)     # cold:    M_grav -> M_b
+    nBc_of_Mb = _branch_interp(tov_tr,  _MB, _NBC)     # trapped: M_b    -> n_Bc
 
-    nB_iso = np.linspace(1, 10, 200) * n_sat
-    ax.plot(nB_iso / n_sat, T_iso(nB_iso), color='red', ls='-.', lw=1.3,
-            label=rf'isentrope $S={S:g}$', zorder=3)
+    def _pt(nb):                                       # density -> (n_B/n_sat, T)
+        return (nb / n_sat, float(T_iso(nb))) if np.isfinite(nb) else (np.nan, np.nan)
 
-    tov_tr = _tov_trapped_seq(YL_iso, S)
+    for mt in _MDOTS_F6:
+        pf = _pt(float(nBc_M(mt)))                    # solid: fixed grav mass
+        pw = _pt(float(nBc_of_Mb(Mb_of_M(mt))))       # white: M_b-matched to cold star
+        if np.isfinite(pf[0]):
+            ax.plot(*pf, 'o', ms=5.5, color=color, mec='white', mew=0.7, zorder=7)
+        if np.isfinite(pw[0]):
+            ax.plot(*pw, 'o', ms=5.5, color='white', mec=color, mew=1.3, zorder=7)
+        _mark_pair(ax, [pf, pw], f"{mt:g}", color)
 
-    # filled: PNS at gravitational mass M (+ M_max at the sequence's tip)
-    nBc_M   = _branch_interp(tov_tr, _M, _NBC)
-    nBc_fil = [float(nBc_M(M)) for M in M_GRAV]
-    i_mx    = int(np.argmax(tov_tr[:, _M]))
-    nBc_fil.append(float(tov_tr[i_mx, _NBC]))              # M_max
-    nBc_fil = np.array(nBc_fil)
-    ax.scatter(nBc_fil / n_sat, T_iso(nBc_fil), s=34, c='k', zorder=5)
+    sf = _pt(tov_tr[int(np.argmax(tov_tr[:, _M])), _NBC])              # trapped tip
+    sw = _pt(float(nBc_of_Mb(tov_cold[int(np.argmax(tov_cold[:, _M])), _MB])))  # cold M_max
+    if np.isfinite(sf[0]):
+        ax.plot(*sf, '*', ms=13, color=color, mec='white', mew=0.6, zorder=7)
+    if np.isfinite(sw[0]):
+        ax.plot(*sw, '*', ms=13, color='white', mec=color, mew=1.1, zorder=7)
+    _mark_pair(ax, [sf, sw], r"$M_{\max}$", color)
 
-    # open: PNS whose baryonic mass = Mb of the cold (T=0) star at M(T0)
-    Mb_of_M   = _branch_interp(tov_cold, _M, _MB)          # cold: M -> Mb
-    nBc_of_Mb = _branch_interp(tov_tr,  _MB, _NBC)         # trapped: Mb -> n_Bc
-    nBc_open  = np.array([float(nBc_of_Mb(Mb_of_M(M0))) for M0 in M_COLD])
-    ax.scatter(nBc_open / n_sat, T_iso(nBc_open), s=34,
-               facecolors='none', edgecolors='k', linewidths=1.2, zorder=5)
+# one figure per quark parametrization
+for FN_SET in quark_param_sets:
+    _tag    = q_tag_of(FN_SET)
+    _T_CFL  = float(T_critical(FN_SET['Delta0']))   # CFL Tc = 0.57*2^(1/3)*Delta0 [MeV]
+    _panels = [dict(**PNS_T0,   lab='(a)'),         # left  = t_0
+               dict(**PNS_TMAX, lab='(b)')]         # right = t_Tmax
 
-    ax.set_xlabel(r'$n_B^H / n_{\rm sat}$')
-    ax.set_title(rf"$Y_L\approx{YL_iso:.2f}$, $S={S:g}$")
-    ax.set_box_aspect(1)                                   # square panels
-    panel_label(ax, pan['lab'])
-axes[0].set_ylabel(r'$T_{\rm nuc}$ [MeV]')
+    fig, axes = plt.subplots(1, 2, figsize=(9, 4.6), sharey=True)
+    for ax, pan in zip(axes, _panels):
+        YL, S, col = pan['YLH'], pan['S'], pan['color']
+        YL_used = None
+        for sg in sigma_list:
+            for ph, ls in _PHASE_LS.items():          # unpCFL drawn last -> on top
+                stem = f"Htrapped_{FN_FLAVOR}_{FN_CHARGE}_{ph}_{_tag}_s{int(sg)}"
+                if stem not in nuc_sets:
+                    continue
+                grids   = nuc_sets[stem].hadronic_grids
+                iYL     = int(np.argmin(np.abs(grids['Y_L_H'] - YL)))
+                YL_used = grids['Y_L_H'][iYL]
+                res = compute_nucleation_density(nuc_sets[stem],
+                                                 tau_target=FN_TAU, scan='n_B')
+                nB, T = nucleation_curve(res, iYL)
+                m = np.isfinite(nB) & np.isfinite(T)
+                if FN_CUT_CFL_ABOVE_TC and ph == 'cfl':
+                    m &= (T <= _T_CFL)                # CFL undefined above Tc
+                if m.any():
+                    ax.plot(nB[m] / n_sat, T[m], color=_sig_col[sg], ls=ls,
+                            lw=_PHASE_LW[ph], alpha=_PHASE_ALPHA[ph])
 
-# Legends: phase (line style) + markers on the left; sigma (colour) on the right.
-_ph_handles = [Line2D([], [], color='k', ls=ls, label=lbl)
-               for lbl, ls in [('unpaired', ':'), ('CFL', '--'), ('unpCFL', '-')]]
-_mk_handles = [
-    Line2D([], [], marker='o', color='k', ls='none',
-           label=r'PNS $M$=1,1.3,1.4,1.5,max'),
-    Line2D([], [], marker='o', mfc='none', mec='k', color='k', ls='none',
-           label=r'PNS $M_b\!=\!M_b(M_{T0})$'),
-]
-_sig_handles = [Line2D([], [], color=_sig_col[sg], ls='-',
-                       label=rf'$\sigma={int(sg)}$') for sg in sigma_list]
-leg1 = axes[0].legend(handles=_ph_handles, loc='upper left', title='phase')
-axes[0].add_artist(leg1)
-axes[0].legend(handles=_mk_handles, loc='lower right', fontsize=10)
-axes[1].legend(handles=_sig_handles, loc='upper right',
-               title=r'$\sigma$ [MeV/fm$^2$]')
+        ax.set_xlim(0.5, 12); ax.set_ylim(1, 80)      # T [MeV], n_B^H/n_sat
+        ax.tick_params(labelleft=True)                # y ticks on both panels
 
-fig.suptitle(rf"$\tau={FN_TAU*1e3:g}$ ms — {FN_FLAVOR}/{FN_CHARGE} — {_tag}", y=1.02)
-fig.tight_layout()
-fig.savefig(f'../output/figures/paper_fig6_Tnuc_{xsd_tag}.pdf', bbox_inches='tight')
-plt.show()
+        # isentrope T(n_B^H) at (Y_L, S), solid in the snapshot colour + PNS markers.
+        # Drawn from 0.5 n_sat up to the PNS M_max central density (branch tip).
+        YL_iso = YL if YL_used is None else float(YL_used)
+        T_iso  = lambda nBc: H['iso_trapped']['T'](nBc, YL_iso, S)
+        tov_tr = _tov_trapped_seq(YL_iso, S)
+        nBc_mx = tov_tr[int(np.argmax(tov_tr[:, _M])), _NBC]     # M_max central density
+        nB_iso = np.linspace(0.5 * n_sat, nBc_mx, 200)
+        ax.plot(nB_iso / n_sat, T_iso(nB_iso), color=col, ls='-', lw=1.8, zorder=3)
+        _iso_markers(ax, tov_tr, T_iso, col)
+
+        ax.set_xlabel(r'$n_B^H / n_{\rm sat}$')
+        ax.set_title(rf"{pan['lbl']}:  $Y_L^H={YL_iso:.2f}$,  $S={S:g}$")
+        ax.set_box_aspect(1)                          # square panels
+        panel_label(ax, pan['lab'])
+    axes[0].set_ylabel(r'$T_{\rm nuc}$ [MeV]')
+
+    # Legends: phase (line style, Fig-1 lw/alpha) top-right of (a); sigma right of
+    # (b) — number-only labels under a small units title.
+    _ph_handles = [Line2D([], [], color='k', ls=_PHASE_LS[p], lw=_PHASE_LW[p],
+                          alpha=_PHASE_ALPHA[p], label=_PHASE_LBL[p]) for p in _PHASE_LS]
+    _sig_handles = [Line2D([], [], color=_sig_col[sg], ls='-', label=f'{int(sg)}')
+                    for sg in sigma_list]
+    axes[0].legend(handles=_ph_handles, loc='upper right')
+    _lg = axes[1].legend(handles=_sig_handles, loc='upper right',
+                         title=r'$\sigma\;[\mathrm{MeV\,fm^{-2}}]$')
+    _lg.get_title().set_fontsize(9)                   # smaller units title
+
+    fig.tight_layout()
+    fig.savefig(f'../output/figures/paper_fig6_Tnuc_{xsd_tag}_{_tag}.pdf',
+                bbox_inches='tight')
+    plt.show()
 
 
 # %% [markdown]
@@ -1863,7 +1913,7 @@ plt.show()
 set_paper_style()
 
 # ---- knobs ----
-FN2_YL, FN2_S       = 0.25, 2.0          # trapped-PNS (Y_L, S)
+FN2_YL, FN2_S       = PNS_TMAX['YLH'], PNS_TMAX['S']   # trapped-PNS (Y_L, S) = t_Tmax
 FN2_FLAVOR          = 'saddlepoint'
 FN2_CHARGE          = 'coulomb_minimize'
 FN2_TAU             = 1e-3               # s (target line on the log10 tau row)
