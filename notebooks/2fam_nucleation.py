@@ -101,16 +101,17 @@ from eos.tov.solver import (
 
 
 # ─── Nucleation: energy barrier + thermal nucleation observables ─────────────
-from nucleation.energy_barrier.small_droplet import (
+# Package layout (post-rewrite): barrier -> composition -> critical -> rates ->
+# tables -> curves, all re-exported from the top-level `nucleation` namespace.
+from nucleation import (
     compute_Qstar_table, load_Qstar_table, build_Qstar_interpolators,
     compute_thermal_nucleation_observables,
     build_thermal_nucleation_interpolators,
     load_thermal_nucleation_table,
     compute_nucleation_density, nucleation_curve,
     export_table, QstarTableData,
+    compute_energy_barrier,
 )
-from nucleation.energy_barrier.small_droplet.solvers import get_solver_Qs
-from nucleation.energy_barrier.small_droplet.observables import compute_energy_barrier
 import nucleation.analysis as nuc_an               # sigma_crit scan engine
 
 # ─── Figure styling + observational-constraint overlays (shared, in-package) ─
@@ -256,9 +257,9 @@ params = create_custom_parametrization(
 # =============================================================================
 quark_param_sets = [
     dict(alpha=0.1*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
-    #dict(alpha=0.1*np.pi/2, B4=165.0, Delta0=180.0, m_s=100.0),
+    dict(alpha=0.3*np.pi/2, B4=145.0, Delta0=180.0, m_s=100.0),
     #dict(alpha=0.1*np.pi/2, B4=170.0, Delta0=175.0, m_s=100.0),
-    dict(alpha=0.18*np.pi/2, B4=150.0, Delta0=126.0, m_s=100.0),  # marginalized posterior
+    #dict(alpha=0.18*np.pi/2, B4=150.0, Delta0=126.0, m_s=100.0),  # marginalized posterior
     dict(alpha=0.08*np.pi/2, B4=158.0, Delta0=157.0, m_s=100.0)   # maximum posterior
 ]
 
@@ -504,6 +505,18 @@ for YL in YL_values_tov:
             compute_baryonic_mass=True, compute_tidal=False,
             backend=TOV_BACKEND, verbose=False,
         )
+
+        # Drop TOV points whose integration returned a non-finite mass: high-e_c
+        # central states past the isentropic EoS table's validity give NaN M,
+        # which would crash the M_max spline (PchipInterpolator) inside
+        # truncate_to_stable_branch. Keep only the physical, finite branch.
+        _finite = np.isfinite(results_full[:, 4])
+        if _finite.sum() < 5:
+            print(f"  ⚠ only {int(_finite.sum())} finite-M points — skipping this (Y_L, S)")
+            continue
+        if not _finite.all():
+            print(f"  dropped {int((~_finite).sum())} non-finite-M TOV points")
+        results_full = results_full[_finite]
 
         results, M_max, _ = truncate_to_stable_branch(
             results_full,
@@ -1296,7 +1309,7 @@ for F1_SET in quark_param_sets[::-1]:
     F1_SIGMA  = 100.0
     F1_TW     = 30.0                                 # panel (a) temperature [MeV]
     F1_DENS   = [1.0, 3, 7]                      # panel (a) n_B^H / n_0
-    F1_TEMPS  = [10.0, 20.0, 30.0, 40.0, 50.0]       # panels (b,c,d) temperatures [MeV]
+    F1_TEMPS  = [20.0, 40.0, 60.0]       # panels (b,c,d) temperatures [MeV]
 
     _PHASE_LS    = {'unpCFL': '-', 'cfl': '--', 'unpaired': ':'}   # line style per phase
     _PHASE_FILL  = {'unpCFL': True, 'cfl': False, 'unpaired': False}
@@ -1885,12 +1898,115 @@ for FN_SET in quark_param_sets:
     axes[0].legend(handles=_ph_handles, loc='upper right')
     _lg = axes[1].legend(handles=_sig_handles, loc='upper right',
                          title=r'$\sigma\;[\mathrm{MeV\,fm^{-2}}]$')
-    _lg.get_title().set_fontsize(9)                   # smaller units title
+    _lg.get_title()#.set_fontsize(12)                   # smaller units title
 
     fig.tight_layout()
     fig.savefig(f'../output/figures/paper_fig6_Tnuc_{xsd_tag}_{_tag}.pdf',
                 bbox_inches='tight')
     plt.show()
+
+
+# %% [markdown]
+# ### Paper Figure 6b — critical-droplet observables *along* the $\tau=\tau_{\rm nuc}$ curve
+#
+# At fixed $Y_L^H$ we walk the nucleation curve $T_{\rm nuc}(n_B^H)$ (the $T$ where
+# $\tau=\tau_{\rm nuc}$, same construction as Fig 6) and read the critical-droplet
+# observables *at each* $(n_B^H, Y_L^H, T_{\rm nuc})$, vs $n_B^H$:
+# **(a)** $R_*$, **(b)** $W_*/T$, **(c)** the droplet baryon number
+# $N_B=\tfrac{4}{3}\pi R_*^3\,n_B^H$, **(d)** the hadronic strangeness $Y_S^H$.
+# **(e)** re-evaluates $\tau$ on the curve (via $\log_{10}\tau$, as the finder does)
+# as a self-consistency check — it should sit on $\tau_{\rm nuc}$.
+# Colour = $\sigma$, line style = phase (unpaired/CFL/unpCFL), as in Fig 6.
+
+# %%
+# ============================================================================
+#  Fig 6b.  Critical-droplet observables along the tau=tau_nuc nucleation curve.
+#    x = n_B^H;  colour = sigma;  line style: unpaired ':', CFL '--', unpCFL '-'.
+#    T_nuc(n_B^H) from compute_nucleation_density (scan='n_B'); observables read
+#    off the (n_B^H, Y_L^H, T) grid interpolators at (n_B^H, Y_L^H, T_nuc).
+# ============================================================================
+set_paper_style()
+from eos.alphabag.thermodynamics_quarks import T_critical
+
+# ---- knobs ----
+QN_SET    = quark_param_sets[0]          # quark parametrization (one figure)
+QN_FLAVOR = 'saddlepoint'
+QN_CHARGE = 'coulomb_minimize'
+QN_YLH    = 0.25                         # fixed Y_L^H
+QN_TAU    = 1e-3                         # tau_nuc [s]
+QN_CUT_CFL_ABOVE_TC = True               # drop CFL points with T_nuc > T_CFL (gap gone)
+_qtag  = q_tag_of(QN_SET)
+_QN_TC = float(T_critical(QN_SET['Delta0']))
+
+# phase styling — same convention as Fig 6 (unpCFL solid+thick, others faded)
+_QN_LS    = {'unpaired': ':', 'cfl': '--', 'unpCFL': '-'}   # order = draw order
+_QN_LW    = {'unpCFL': 2.6, 'cfl': 1.7, 'unpaired': 1.7}
+_QN_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.55}
+_QN_LBL   = {'unpaired': 'unpaired', 'cfl': 'CFL', 'unpCFL': 'unpCFL'}
+_qsig_col = {sg: mpl.cm.viridis(t) for sg, t in
+             zip(sigma_list, np.linspace(0.15, 0.85, len(sigma_list)))}
+
+fig, axes = plt.subplots(2, 3, figsize=(13.5, 8), constrained_layout=True)
+axA, axB, axC, axD, axE, axL = axes.ravel()
+axL.axis('off')                          # 6th panel holds the legends
+YLu = QN_YLH
+for sg in sigma_list:
+    for ph in _QN_LS:                    # unpCFL last -> drawn on top
+        stem = f"Htrapped_{QN_FLAVOR}_{QN_CHARGE}_{ph}_{_qtag}_s{int(sg)}"
+        if stem not in nuc_sets:
+            continue
+        obs   = nuc_sets[stem]
+        grids = obs.hadronic_grids
+        iYL   = int(np.argmin(np.abs(grids['Y_L_H'] - QN_YLH)))
+        YLu   = float(grids['Y_L_H'][iYL])          # snap to the grid node
+        res   = compute_nucleation_density(obs, tau_target=QN_TAU, scan='n_B')
+        nBH, Tnuc = nucleation_curve(res, iYL)       # T_nuc(n_B^H): tau=tau_nuc
+        itp   = build_thermal_nucleation_interpolators(obs)  # R_c/W_c/log10_tau on the grid
+
+        m = np.isfinite(nBH) & np.isfinite(Tnuc)
+        if QN_CUT_CFL_ABOVE_TC and ph == 'cfl':
+            m &= (Tnuc <= _QN_TC)                    # CFL undefined above Tc
+        if not m.any():
+            continue
+        nb, Tn = nBH[m], Tnuc[m]
+        x = nb / n_sat
+        # read observables at each (n_B^H, Y_L^H, T_nuc) point along the curve.
+        # R*/W*/Y_S vary smoothly -> linear interp; tau spans ~70 decades so use
+        # the log10_tau interpolator (matches how the curve finder locates T_nuc).
+        Rstar = np.array([itp['R_c'](_n, YLu, _T) for _n, _T in zip(nb, Tn)])
+        Wc    = np.array([itp['W_c'](_n, YLu, _T) for _n, _T in zip(nb, Tn)])
+        tauc  = 10.0 ** np.array([itp['log10_tau'](_n, YLu, _T) for _n, _T in zip(nb, Tn)])
+        YSH   = np.array([float(H['trapped']['Y_S'](_n, YLu, _T)) for _n, _T in zip(nb, Tn)])
+        NB    = (4.0 / 3.0) * np.pi * Rstar**3 * nb  # baryons in the critical droplet (ambient n_B^H)
+
+        kw = dict(color=_qsig_col[sg], ls=_QN_LS[ph], lw=_QN_LW[ph], alpha=_QN_ALPHA[ph])
+        axA.plot(x, Rstar, **kw)
+        axB.plot(x, Wc / Tn, **kw)
+        axC.plot(x, NB, **kw)
+        axD.plot(x, YSH, **kw)
+        axE.plot(x, tauc, **kw)
+
+for ax in (axA, axB, axC, axD, axE):
+    ax.set_xlabel(r'$n_B^H/n_{\rm sat}$')
+axA.set_ylabel(r'$R_*$ [fm]');                          axA.set_title('(a) critical radius')
+axB.set_ylabel(r'$W_*/T$');                             axB.set_title('(b) barrier / T')
+axC.set_ylabel(r'$N_B=\frac{4}{3}\pi R_*^3\,n_B^H$');   axC.set_title('(c) droplet baryon number')
+axD.set_ylabel(r'$Y_S^H$');                             axD.set_title('(d) hadronic strangeness')
+axE.set_ylabel(r'$\tau$ [s]');                          axE.set_title(r'(e) $\tau$ check')
+axE.axhline(QN_TAU, color='k', ls=(0, (1, 1)), lw=1.0)  # tau_nuc reference
+axE.set_yscale('log')
+
+# legends in the empty 6th panel
+_ph_h  = [Line2D([], [], color='k', ls=_QN_LS[p], lw=_QN_LW[p], alpha=_QN_ALPHA[p],
+                 label=_QN_LBL[p]) for p in _QN_LS]
+_sig_h = [Line2D([], [], color=_qsig_col[sg], ls='-', label=f'{int(sg)}') for sg in sigma_list]
+_l1 = axL.legend(handles=_ph_h, loc='upper left', title='phase'); axL.add_artist(_l1)
+axL.legend(handles=_sig_h, loc='upper right', title=r'$\sigma\;[\mathrm{MeV\,fm^{-2}}]$')
+
+fig.suptitle(rf"$Y_L^H={YLu:.2f}$, $\tau_{{\rm nuc}}={QN_TAU*1e3:g}$ ms — "
+             rf"{QN_FLAVOR}/{QN_CHARGE} — {_qtag}", y=1.03)
+fig.savefig(f'../output/figures/fig6b_droplet_obs_{xsd_tag}_{_qtag}.pdf', bbox_inches='tight')
+plt.show()
 
 
 # %% [markdown]
@@ -2603,3 +2719,77 @@ ax.set_title(rf'unpaired $\sigma_{{\rm crit}}$ — $m_s={U_MS:.0f}$ MeV, '
              rf'$\tau={tau_target*1e3:g}$ ms — {xsd_tag}')
 fig.colorbar(pcm, ax=ax, label=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]')
 fig.tight_layout(); plt.show()
+
+# %% [markdown]
+# ## Electromagnetic screening — reproducing the thesis "screen" figure
+#
+# $W(R)$ at one hadronic point across the electric-charge prescriptions of
+# Sec. *Electric charge neutrality*: **LCN** (local neutrality, no Coulomb),
+# **GCN** (global neutrality, no Coulomb), **GCN+Coulomb** (unscreened $\propto
+# R^5$), **minimization** (`coulomb_minimize`, Coulomb inside the saddle), and
+# **screening** (Debye-screened Coulomb, $\lambda_D$ from $\chi_e=\partial
+# n_e/\partial\mu_e$). The dashed grey curve is `screening` with
+# $\lambda_D=10^6$ fm — it must fall on top of **GCN+Coulomb** (unscreened
+# limit), the end-to-end check that the new screened Coulomb term is wired
+# correctly. Dots mark each critical point $R_*$.
+
+# %%
+# ============================================================================
+#  Screening validation: W(R) for the five charge prescriptions at one point.
+# ============================================================================
+SC_T    = 20.0                      # temperature [MeV]
+SC_NBH  = 3.0                       # n_B^H / n_sat
+SC_SIG  = 30.0                      # surface tension [MeV/fm^2]
+SC_PAR  = get_alphabag_custom(alpha=m5_set['alpha'], B4=m5_set['B4'], m_s=m5_set['m_s'])
+SC_Rg   = np.linspace(0.02, 12.0, 500)
+
+# (charge_mode, label, colour, extra kwargs) — colours echo thesis Fig. screen
+_SC_MODES = [
+    ('lcn',              'LCN',            'tab:red',    {}),
+    ('gcn',              'GCN (no Coul.)', 'tab:purple', {}),
+    ('gcn_coulomb',      'GCN + Coul.',    'tab:blue',   {}),
+    ('coulomb_minimize', 'Minimization',   'tab:green',  {}),
+    ('screening',        'Screening',      'tab:orange', {}),
+]
+
+fig, ax = plt.subplots(figsize=(7, 5), constrained_layout=True)
+# Scale the y-axis to the PHYSICAL barriers (LCN/GCN/minimization/screening).
+# The unscreened GCN+Coulomb term grows as R^5 and can run far off-scale — that
+# blow-up is exactly the pathology screening/minimization cure (thesis Fig. screen),
+# so it is allowed to leave the top of the frame rather than compress everything.
+_wmax = 0.0
+for _ch, _lbl, _col, _kw in _SC_MODES:
+    _eb = compute_energy_barrier(
+        H['trapped'], SC_NBH * n_sat, SC_T, SC_SIG,
+        electric_charge_mode=_ch, params=SC_PAR, flavor_mode='saddlepoint',
+        quark_phase='unpaired', Y_L_H=m5_YL_used, R_values=SC_Rg, **_kw)
+    ax.plot(SC_Rg, _eb.W, color=_col, lw=1.9, label=_lbl)
+    if np.isfinite(_eb.W).any():
+        _k = int(np.nanargmax(_eb.W))
+        ax.plot(SC_Rg[_k], _eb.W[_k], 'o', ms=6, color=_col, mfc='white', zorder=5)
+        if _ch != 'gcn_coulomb':               # exclude the R^5 blow-up from the y-scale
+            _wmax = max(_wmax, float(_eb.W[_k]))
+
+# Unscreened limit: screening with a huge lambda_D must overlie GCN+Coulomb.
+_eb_big = compute_energy_barrier(
+    H['trapped'], SC_NBH * n_sat, SC_T, SC_SIG, electric_charge_mode='screening',
+    params=SC_PAR, flavor_mode='saddlepoint', quark_phase='unpaired',
+    Y_L_H=m5_YL_used, R_values=SC_Rg, lambda_D=1e8)
+ax.plot(SC_Rg, _eb_big.W, color='0.4', lw=1.4, ls='--',
+        label=r'Screening $\lambda_D{\to}\infty$')
+
+# annotate the physical Debye length used by the screening curve
+_eb_scr = compute_energy_barrier(
+    H['trapped'], SC_NBH * n_sat, SC_T, SC_SIG, electric_charge_mode='screening',
+    params=SC_PAR, flavor_mode='saddlepoint', quark_phase='unpaired',
+    Y_L_H=m5_YL_used, R_values=SC_Rg)
+ax.axhline(0, color='0.6', lw=0.7, zorder=0)
+ax.set_xlim(0, 8)
+if _wmax > 0:
+    ax.set_ylim(-0.2 * _wmax, 1.3 * _wmax)
+ax.set_xlabel(r'$R$ [fm]'); ax.set_ylabel(r'$W$ [MeV]')
+ax.set_title(rf"Charge prescriptions, $T={SC_T:.0f}$ MeV, "
+             rf"$n_B^H/n_\mathrm{{sat}}={SC_NBH:g}$, $\sigma={SC_SIG:.0f}$ "
+             rf"MeV/fm$^2$, $\lambda_D={_eb_scr.lambda_D:.1f}$ fm — {m5_tag}")
+ax.legend(loc='upper right', fontsize=8)
+plt.show()

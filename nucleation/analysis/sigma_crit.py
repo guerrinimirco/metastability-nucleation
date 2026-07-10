@@ -36,12 +36,8 @@ from eos.alphabag.thermodynamics_quarks import T_critical   # CFL gap melting te
 from eos.general.physics_constants import hc
 from eos.tov.solver import (EOSTable_for_TOV, generate_ec_logspace,
                             compute_tov_sequence, truncate_to_stable_branch)
-from nucleation.energy_barrier.small_droplet.solvers import get_solver_Qs
-from nucleation.energy_barrier.small_droplet.barrier import (
-    driving_force, critical_radius_noCoulomb, critical_work_noCoulomb,
-    work_of_formation)
-from nucleation.energy_barrier.small_droplet.observables import _find_Rc_Wc_step
-from nucleation.general_nucleation.thermal import nucleation_rate, nucleation_time
+from nucleation.critical import critical_droplet
+from nucleation.rates import nucleation_rate, nucleation_time
 
 try:
     import joblib  # noqa: F401  -- presence check; Parallel imported in-function
@@ -458,94 +454,32 @@ def central_state(MT0, star: StarMatch):
     return nBHc, T_c, H_pt
 
 
-def _solve_phase(sigma, H_pt, flavor, charge, phase, cache, params, Delta0, nuc):
-    """(Qs, R_c_or_None). lcn/gcn are sigma-independent -> cache per phase."""
-    sig_indep = charge in ('lcn', 'gcn', 'gcn_coulomb')
-    if sig_indep and phase in cache:
-        return cache[phase]
-    kw = dict(quark_phase=phase, Delta0=Delta0,
-              include_photons=nuc.include_photons, include_gluons=nuc.include_gluons,
-              include_thermal_neutrinos=nuc.include_thermal_neutrinos)
-    if not sig_indep:
-        kw['sigma'] = sigma
-    out = get_solver_Qs(flavor, charge, params, **kw)(H_pt)
-    res = (out, None) if sig_indep else (out if out is not None else (None, None))
-    if sig_indep:
-        cache[phase] = res
-    return res
-
-
-def _Rc_single(Df, R_c_solver, sigma, charge):
-    if charge in ('lcn', 'gcn'):
-        return float(critical_radius_noCoulomb(Df, sigma)) if Df < 0 else np.nan
-    if R_c_solver is None or not np.isfinite(R_c_solver) or R_c_solver <= 0:
-        return np.nan
-    return float(R_c_solver)
-
-
 def critical_droplet_pt(sigma, H_pt, T_c, flavor, charge, phase, cache,
                         params, Delta0, nuc: NucConfig):
     """Critical droplet at one hadronic point: (R_c [fm], W_c [MeV], Qs).
 
-    The single source for the per-point barrier used by both ``tau_pt`` (the
-    sigma_crit root-find) and the notebook's droplet-observable plots, so the
-    barrier physics can never diverge between them.
+    Thin wrapper over ``nucleation.critical.critical_droplet`` -- the single
+    barrier engine shared with the tables and the notebook W(R) plots, so the
+    physics can never diverge. ``cache`` (a dict) memoizes the sigma-independent
+    composition solves across the sigma scan.
 
     Returns
     -------
     (R_c, W_c, Qs) with the conventions
       * (nan, nan, None)  -- solver failed / no critical droplet found;
-      * (nan, inf,  Qs)   -- hadronic phase STABLE (Delta_f >= 0): the barrier
-                             is infinite, nucleation never happens;
+      * (nan, inf,  Qs)   -- hadronic phase STABLE (Delta_f >= 0): infinite
+                             barrier, nucleation never happens;
       * finite values     -- genuine critical droplet; Qs is the droplet state
                              (for unpCFL: the phase selected at the peak).
     """
-    if phase == 'unpCFL':
-        Qu, Rcu = _solve_phase(sigma, H_pt, flavor, charge, 'unpaired', cache, params, Delta0, nuc)
-        Qc, Rcc = _solve_phase(sigma, H_pt, flavor, charge, 'cfl', cache, params, Delta0, nuc)
-        # The CFL core is required. The unpaired mantle may legitimately have NO
-        # critical droplet (its dW/dR=0 root undergoes a saddle-node above some
-        # sigma -> the coulomb_minimize solver returns None). That is not a
-        # failure of the unpCFL point: with R_c_unp = NaN the step combiner
-        # falls back to the CFL upper branch. So bail only if the CFL core fails.
-        if Qc is None:
-            return np.nan, np.nan, None
-        Dfc = float(driving_force(Qc, H_pt))
-        Rc_c = _Rc_single(Dfc, Rcc, sigma, charge)
-        dnC_c = (float(Qc.Y_C) - float(Qc.Y_e)) * float(Qc.n_B)
-        if Qu is not None:
-            Dfu = float(driving_force(Qu, H_pt))
-            Rc_u = _Rc_single(Dfu, Rcu, sigma, charge)
-            dnC_u = (float(Qu.Y_C) - float(Qu.Y_e)) * float(Qu.n_B)
-        else:                                   # no unpaired critical droplet
-            Dfu = Rc_u = dnC_u = np.nan
-        Rx = float(crossover_radius(T_c, Delta0))
-        R_c, W_c, S = _find_Rc_Wc_step(
-            np.asarray(Rc_u, float), np.asarray(Rc_c, float), Rx,
-            np.asarray(Dfu, float), np.asarray(Dfc, float),
-            np.asarray(dnC_u, float), np.asarray(dnC_c, float), sigma)
-        R_c, W_c, S = float(R_c), float(W_c), float(S)
-        if np.isposinf(W_c):                    # both phases non-favoured
-            return np.nan, np.inf, Qc
-        Qs_sel = Qc if S > 0.5 else Qu
-        if Qs_sel is None:                      # unpaired peak selected but absent
-            return np.nan, np.nan, None
-        return R_c, W_c, Qs_sel
-
-    Qs, R_c = _solve_phase(sigma, H_pt, flavor, charge, phase, cache, params, Delta0, nuc)
-    if Qs is None:
-        return np.nan, np.nan, None
-    Df = float(driving_force(Qs, H_pt))
-    if Df >= 0:                                 # H stable: infinite barrier
-        return np.nan, np.inf, Qs
-    if charge in ('lcn', 'gcn'):
-        return (float(critical_radius_noCoulomb(Df, sigma)),
-                float(critical_work_noCoulomb(Df, sigma)), Qs)
-    Rc_v = _Rc_single(Df, R_c, sigma, charge)
-    if not np.isfinite(Rc_v):
-        return np.nan, np.nan, Qs
-    dnC = (float(Qs.Y_C) - float(Qs.Y_e)) * float(Qs.n_B)
-    return Rc_v, float(work_of_formation(Rc_v, Df, sigma, dnC)), Qs
+    Rx = float(crossover_radius(T_c, Delta0)) if phase == 'unpCFL' else None
+    cd = critical_droplet(
+        H_pt, sigma=sigma, params=params, flavor_mode=flavor,
+        electric_charge_mode=charge, quark_phase=phase, Delta0=Delta0, Rx=Rx,
+        cache=cache, include_photons=nuc.include_photons,
+        include_gluons=nuc.include_gluons,
+        include_thermal_neutrinos=nuc.include_thermal_neutrinos)
+    return cd.R_c, cd.W_c, cd.Qs
 
 
 def tau_pt(sigma, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc: NucConfig):
