@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from nucleation.analysis.sigma_crit import (
-    critical_droplet_pt, tau_pt, sigma_target_pt, NucConfig)
+    critical_droplet_pt, tau_pt, sigma_target_pt, rehad_flags, NucConfig)
 
 SIGMA = 30.0
 DELTA0 = 80.0
@@ -51,3 +51,28 @@ def test_sigma_target_pt_synthetic(monkeypatch):
     # 3) never nucleates (tau always above target) -> NaN
     monkeypatch.setattr(sc, 'tau_pt', lambda s, *a, **k: 10.0 ** (lo + 5))
     assert np.isnan(sigma_target_pt(None, None, 'f', 'c', 'p', None, None, nuc))
+
+
+def test_rehad_flags_synthetic():
+    """rehad_flags on controlled ΔP(n_BH) profiles (no EoS needed)."""
+    n = np.linspace(0.3, 1.5, 13)
+
+    # monotone increasing, crosses 0 once -> both flags True, cross at the 0-point
+    d = n - 0.9
+    no_re, strong, cross = rehad_flags(n, d)
+    assert no_re and strong
+    assert cross == pytest.approx(0.9, abs=n[1] - n[0])
+
+    # crosses positive then dips back negative -> no_rehad False, not strong
+    d2 = np.array([-1, -0.5, 0.2, 0.5, -0.1, 0.3, 1, 2, 3, 4, 5, 6, 7], float)
+    no_re2, strong2, _ = rehad_flags(n, d2)
+    assert not no_re2 and not strong2
+
+    # never reaches 0 -> no crossing: no_rehad False, cross NaN
+    no_re3, _, cross3 = rehad_flags(n, np.full_like(n, -1.0))
+    assert not no_re3 and np.isnan(cross3)
+
+    # NaNs (failed solves) dropped before evaluation
+    d4 = n - 0.9
+    d4[2] = np.nan
+    assert rehad_flags(n, d4)[0]

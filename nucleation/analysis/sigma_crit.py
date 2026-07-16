@@ -36,7 +36,8 @@ from eos.alphabag.thermodynamics_quarks import T_critical   # CFL gap melting te
 from eos.general.physics_constants import hc
 from eos.tov.solver import (EOSTable_for_TOV, generate_ec_logspace,
                             compute_tov_sequence, truncate_to_stable_branch)
-from nucleation.critical import critical_droplet
+from nucleation.critical import critical_droplet, _build_H_from_interp
+from nucleation.composition import get_solver_Qs
 from nucleation.rates import nucleation_rate, nucleation_time
 
 try:
@@ -332,6 +333,86 @@ def passes_unpaired_filters(alpha, B4, cfg: FilterConfig):
     if not np.isfinite(M_max) or not (lo <= M_max <= hi):
         return False, M_max, 'mmax'
     return True, M_max, 'OK'
+
+
+# =============================================================================
+#  Droplet-level re-hadronization test  (ΔP = P_Q* - P_H over n_BH)
+# =============================================================================
+# This is the *droplet* re-hadronization test, distinct from the bulk-EoS one in
+# passes_*_filters. There Q* is the bulk quark EoS crossed against P_H in mu_B
+# space. Here, for each hadronic density n_BH we solve the Q* droplet at the LOCAL
+# hadronic conditions (n_BH, Y_LH, T) -- so mu_B^Q* = mu_B^H by the saddlepoint
+# equations -- and compare its pressure P_Q* to P_H(n_BH). Physics: at matched
+# mu_B a higher-pressure phase is favoured, so ΔP = P_Q* - P_H > 0 means the quark
+# droplet is the stable phase and cannot re-hadronize at that density.
+
+def rehad_pressure_profile(
+        H_interp, params, n_B_H_grid, *, Y_L_H=None, T=None,
+        flavor_mode='saddlepoint', electric_charge_mode='gcn',
+        quark_phase='unpaired', Delta0=None,
+        include_photons=True, include_gluons=True,
+        include_thermal_neutrinos=True):
+    """ΔP(n_BH) = P_Q*(n_BH conditions) - P_H(n_BH), swept over n_B_H_grid.
+
+    Q* is solved at each hadronic point via the same composition machinery the
+    barrier uses (get_solver_Qs); failed solves give NaN. n_B_H_grid must be
+    ascending (the strong flag differentiates along it). Returns the grid (echoed)
+    and the ΔP array [MeV/fm^3]."""
+    eq_type = H_interp['eq_type']
+    solver = get_solver_Qs(
+        flavor_mode, electric_charge_mode, params, quark_phase=quark_phase,
+        Delta0=Delta0, include_photons=include_photons,
+        include_gluons=include_gluons,
+        include_thermal_neutrinos=include_thermal_neutrinos)
+
+    dP = np.full(len(n_B_H_grid), np.nan)
+    guess = None
+    for i, n_B_H in enumerate(n_B_H_grid):
+        if eq_type == 'beta_eq':
+            pt = (n_B_H, T)
+        elif eq_type == 'trapped_neutrinos':
+            pt = (n_B_H, Y_L_H, T)
+        elif eq_type == 'fixed_yc':
+            pt = (n_B_H, Y_L_H, T)   # Y_L_H reused as Y_C_H here
+        else:
+            raise ValueError(f"Unsupported eq_type: '{eq_type}'")
+        H = _build_H_from_interp(H_interp, pt, eq_type)
+        Qs = solver(H, initial_guess=guess)
+        if isinstance(Qs, tuple):          # coulomb_minimize returns (Q*, R_c)
+            Qs = Qs[0]
+        if Qs is None:
+            continue
+        dP[i] = Qs.P_total - H.P_total
+        guess = np.array([Qs.mu_u, Qs.mu_d, Qs.mu_s, Qs.mu_e])
+    return np.asarray(n_B_H_grid), dP
+
+
+def rehad_flags(n_B_H_grid, dP):
+    """(no_rehad, no_rehad_strong, n_BH_cross) from a ΔP(n_BH) profile.
+
+    * no_rehad         -- once ΔP first reaches >=0 (crossing n_BH_cross), it stays
+                          strictly >0 for every larger n_BH (quark phase never
+                          gives pressure back to hadronic matter).
+    * no_rehad_strong  -- ΔP is strictly increasing in n_BH everywhere: the quark
+                          droplet gets monotonically more favoured with density.
+
+    NaNs (failed Q* solves) are dropped first. Flags are False and n_BH_cross NaN
+    if there is no crossing or too few finite points."""
+    n = np.asarray(n_B_H_grid, float)
+    d = np.asarray(dP, float)
+    fin = np.isfinite(d)
+    n, d = n[fin], d[fin]
+    if d.size < 2:
+        return False, False, np.nan
+
+    no_rehad_strong = bool(np.all(np.diff(d) > 0.0))
+
+    cross_idx = np.argmax(d >= 0.0) if np.any(d >= 0.0) else -1
+    if cross_idx < 0:
+        return False, no_rehad_strong, np.nan
+    n_BH_cross = float(n[cross_idx])
+    no_rehad = bool(np.all(d[cross_idx + 1:] > 0.0))
+    return no_rehad, no_rehad_strong, n_BH_cross
 
 
 def replay_cfl(alpha, B4, Delta0, cfg: FilterConfig, e_c_vec=None):

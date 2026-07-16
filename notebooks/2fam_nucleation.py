@@ -256,11 +256,12 @@ params = create_custom_parametrization(
 #  nucleation) loops over all sets, tagging files/keys via q_tag_of(p).
 # =============================================================================
 quark_param_sets = [
-    dict(alpha=0.1*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
-    dict(alpha=0.3*np.pi/2, B4=145.0, Delta0=180.0, m_s=100.0),
-    #dict(alpha=0.1*np.pi/2, B4=170.0, Delta0=175.0, m_s=100.0),
+    dict(alpha=0.3*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
+    dict(alpha=0.3*np.pi/2, B4=165.0, Delta0=200.0, m_s=100.0),
+    dict(alpha=0.3*np.pi/2, B4=150.0, Delta0=80.0, m_s=100.0),
+    #dict(alpha=0.1*np.pi/2, B4=450.0, Delta0=80.0, m_s=100.0),
     #dict(alpha=0.18*np.pi/2, B4=150.0, Delta0=126.0, m_s=100.0),  # marginalized posterior
-    dict(alpha=0.08*np.pi/2, B4=158.0, Delta0=157.0, m_s=100.0)   # maximum posterior
+    #dict(alpha=0.08*np.pi/2, B4=158.0, Delta0=157.0, m_s=100.0)   # maximum posterior
 ]
 
 
@@ -296,7 +297,7 @@ tau_target = 1e-3         # s  (1 ms)
 
 # Surface tensions σ of the quark–hadron interface to scan [MeV/fm^2].
 # Used by the Q* tables (Part II.5) and every nucleation observable downstream.
-sigma_list = [50.0, 100.0, 150.0, 200.0]
+sigma_list = [30.0, 50.0, 100.0]
 
 # ── unpCFL crossover radius ──────────────────────────────────────────────────
 # unpCFL droplet = CFL core + unpaired mantle, switching at the coherence radius
@@ -1929,7 +1930,7 @@ set_paper_style()
 from eos.alphabag.thermodynamics_quarks import T_critical
 
 # ---- knobs ----
-QN_SET    = quark_param_sets[0]          # quark parametrization (one figure)
+QN_SET    = quark_param_sets[2]          # quark parametrization (one figure)
 QN_FLAVOR = 'saddlepoint'
 QN_CHARGE = 'coulomb_minimize'
 QN_YLH    = 0.25                         # fixed Y_L^H
