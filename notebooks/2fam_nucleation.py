@@ -258,7 +258,8 @@ params = create_custom_parametrization(
 quark_param_sets = [
     dict(alpha=0.3*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
     dict(alpha=0.3*np.pi/2, B4=165.0, Delta0=200.0, m_s=100.0),
-    dict(alpha=0.3*np.pi/2, B4=150.0, Delta0=80.0, m_s=100.0),
+    dict(alpha=0.3*np.pi/2, B4=150.0, Delta0=100.0, m_s=100.0),
+    dict(alpha=0.3*np.pi/2, B4=160.0, Delta0=150.0, m_s=100.0),
     #dict(alpha=0.1*np.pi/2, B4=450.0, Delta0=80.0, m_s=100.0),
     #dict(alpha=0.18*np.pi/2, B4=150.0, Delta0=126.0, m_s=100.0),  # marginalized posterior
     #dict(alpha=0.08*np.pi/2, B4=158.0, Delta0=157.0, m_s=100.0)   # maximum posterior
@@ -2160,7 +2161,7 @@ plt.show()
 #  dashed) contour lines, and the R* droplet-regime zones. Regime via _regime_grid.
 # ============================================================================
 # ---- layer toggles: set any False to drop that layer -----------------------
-F8_SHOW          = [0, 2]     # which alpha_s panel indices to draw (pi/2 x 0.1, 0.3)
+F8_SHOW          = [0, 1]     # which alpha_s panel indices to draw (pi/2 x 0.1, 0.3)
 F8_HEATMAP       = True       # sigma_crit colour fill + colorbar
 F8_ISO_SIGMA     = True       # iso-sigma_crit contour lines (black)
 F8_ISO_MMAX      = True       # iso-M_max contour lines (white dashed)
