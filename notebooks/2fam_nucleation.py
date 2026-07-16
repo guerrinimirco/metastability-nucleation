@@ -256,11 +256,12 @@ params = create_custom_parametrization(
 #  nucleation) loops over all sets, tagging files/keys via q_tag_of(p).
 # =============================================================================
 quark_param_sets = [
+    dict(alpha=0.08*np.pi/2, B4=158.0, Delta0=157.0, m_s=100.0),
     dict(alpha=0.3*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
+    dict(alpha=0.1*np.pi/2, B4=450.0, Delta0=80.0, m_s=100.0),
     dict(alpha=0.3*np.pi/2, B4=165.0, Delta0=200.0, m_s=100.0),
-    dict(alpha=0.3*np.pi/2, B4=150.0, Delta0=100.0, m_s=100.0),
-    dict(alpha=0.3*np.pi/2, B4=160.0, Delta0=150.0, m_s=100.0),
-    #dict(alpha=0.1*np.pi/2, B4=450.0, Delta0=80.0, m_s=100.0),
+    #dict(alpha=0.3*np.pi/2, B4=150.0, Delta0=100.0, m_s=100.0),
+    #dict(alpha=0.3*np.pi/2, B4=160.0, Delta0=150.0, m_s=100.0),
     #dict(alpha=0.18*np.pi/2, B4=150.0, Delta0=126.0, m_s=100.0),  # marginalized posterior
     #dict(alpha=0.08*np.pi/2, B4=158.0, Delta0=157.0, m_s=100.0)   # maximum posterior
 ]
@@ -298,7 +299,7 @@ tau_target = 1e-3         # s  (1 ms)
 
 # Surface tensions σ of the quark–hadron interface to scan [MeV/fm^2].
 # Used by the Q* tables (Part II.5) and every nucleation observable downstream.
-sigma_list = [30.0, 50.0, 100.0]
+sigma_list = [50.0, 100.0, 150, 200]
 
 # ── unpCFL crossover radius ──────────────────────────────────────────────────
 # unpCFL droplet = CFL core + unpaired mantle, switching at the coherence radius
@@ -988,11 +989,23 @@ _sig_methods = [
 # Config objects consumed by the engine (P_H arrays come from Part III.1).
 # tov_backend=TOV_BACKEND routes the CFL M_max filter and the M-R replay through
 # the fast solver too — that (not Part II) is where most TOV time is spent.
+# No-rehadronization filter = the DROPLET test (replaces the old bulk P_CFL>P_H
+# crossing): at each hadronic n_BH solve the Q* droplet and require ΔP=P_Q*-P_H to
+# stay positive past its crossing (no_rehad -> 're-hadr.') AND be monotone in n_BH
+# (no_rehad_strong -> 'quasi-re-hadr.'). Both are acceptance criteria. CFL scan is
+# cold beta-eq -> H['betaeq']; sweep ~2-8 n_sat (tune n_B_H_grid_rehad). T_rehad is
+# the betaeq table's T-grid FLOOR (not 0.0, which is off-grid -> NaN H) — same cold
+# convention as P_H_of_muB above. merge_rehad_labels=True folds both failures into
+# one 're-hadr.' zone.
+n_B_H_grid_rehad = np.linspace(2.0, 8.0, 40) * n_sat            # fm^-3
+T_H_floor = float(H_table['betaeq'].grids['T'][0])             # cold hadronic T [MeV]
 _filt_cfg = nuc_an.FilterConfig(
     P_H_of_muB=P_H_of_muB, mu_B_H_sorted=mu_B_H_sorted, P_H_sorted=P_H_sorted,
     m_s=m_s_fixed, n_B_grid=n_B_grid_cfl, e_c_vec_tov=e_c_vec_tov,
     M_max_window=M_max_window, e_over_nB_max=e_over_nB_max,
-    tov_backend=TOV_BACKEND)
+    tov_backend=TOV_BACKEND,
+    H_interp_rehad=H['betaeq'], n_B_H_grid_rehad=n_B_H_grid_rehad,
+    T_rehad=T_H_floor, merge_rehad_labels=False)
 _nuc_cfg = nuc_an.NucConfig(sig_lo=sig_lo, sig_hi=sig_hi,
                             tau_target=tau_target, V=V_nuc)
 
@@ -1086,7 +1099,8 @@ print(f"engine bound: star (Y_L={YLH}, S={S}), σ∈[{sig_lo},{sig_hi}], "
 #  Validate EVERY set in quark_param_sets with the engine filters + M-R plot.
 # =============================================================================
 _REASON_TXT = {'solve': 'CFL solve failed', 'witten': 'Witten bound',
-               'rehadr': 're-hadronizes', 'mmax': 'M_max outside window',
+               'rehadr': 're-hadronizes', 'rehad_quasi': 'quasi-re-hadronizes',
+               'mmax': 'M_max outside window',
                'OK': 'ALL PASS', 'twoflavor': '2-flavor matter bound'}
 
 val_curves = []                       # (tag, curve dict, all-pass flag)
@@ -2184,12 +2198,17 @@ _reg8 = (_regime_grid(_SIG8, _al8, _B48, _D08, float(_F8['MT0']), slices=F8_SHOW
 OKAB = dict(orange='#E69F00', sky='#56B4E9', green='#009E73', blue='#0072B2',
             vermillion='#D55E00', purple='#CC79A7', grey='#9a9a9a')
 # excluded-region reason -> (reason int, boundary colour, label, label rotation,
-# label-on-left-panel-only). reason ints from nuc_an.REASON_CODE: 1 witten,
-# 2 rehadr, 3 mmax, 5 twoflavor.
-_HSPEC = [(3, OKAB['vermillion'], r'$M_{\rm QS}^{\rm max}<2M_\odot$', 45,  False),
-          (1, OKAB['green'],      'SQM not abs.\nstable',             0,  False),
-          (5, OKAB['grey'],       '2 flav.\nstability',               90, True),  # left only
-          (2, OKAB['blue'],       're-hadr.',                         0,  False)]
+# label-on-left-panel-only). Codes pulled from nuc_an.REASON_CODE by name so this
+# never drifts when codes are renumbered. The no-rehadronization filter is the
+# droplet test: 'rehadr' (no_rehad fails) -> "re-hadr.", 'rehad_quasi' (no_rehad
+# passes but not monotone) -> "quasi-re-hadr." (drop this row + set
+# merge_rehad_labels=True on _filt_cfg to fold both into one "re-hadr." zone).
+_RC = nuc_an.REASON_CODE
+_HSPEC = [(_RC['mmax'],        OKAB['vermillion'], r'$M_{\rm QS}^{\rm max}<2M_\odot$', 45,  False),
+          (_RC['witten'],      OKAB['green'],      'SQM not abs.\nstable',             0,  False),
+          (_RC['twoflavor'],   OKAB['grey'],       '2 flav.\nstability',               90, True),  # left only
+          (_RC['rehadr'],      OKAB['blue'],       're-hadr.',                         0,  False),
+          (_RC['rehad_quasi'], OKAB['purple'],     'quasi-\nre-hadr.',                 0,  False)]
 _REGCOL = [OKAB['orange'], OKAB['purple'], OKAB['sky']]           # codes 0, 1, 2
 _REGLAB = [r'$R_*=R^{\rm unp}_*$', r'$R_*=R_{\Delta}$', r'$R_*=R^{\rm CFL}_*$']     # codes 0, 1, 2
 _vmin8, _vmax8 = np.nanmin(_SIG8), np.nanmax(_SIG8[np.isfinite(_SIG8)])
@@ -2205,7 +2224,7 @@ def _draw_reject(ax, ra, cpanel, labels=True):
         if labels and not (_left_only and cpanel > 0):
             _r, _cc = np.where(_m)
             ax.text(np.median(_B48[_cc]), np.median(_D08[_r]), _lab, color=_col,
-                    fontsize=(9.5 if _code == 3 else 8.5),   # M_QS^max label +1 pt
+                    fontsize=(9.5 if _code == _RC['mmax'] else 8.5),   # M_QS^max label +1 pt
                     fontweight='bold', ha='center', va='center',
                     rotation=_rot, zorder=7)
 
@@ -2252,7 +2271,7 @@ for _c, _ia in enumerate(F8_SHOW):
     #     mass-relevant cells (CFL-viable + the M<2 band); levels above 2 Msun --
     #     the 2 Msun edge itself is the vermillion M_max reject boundary.
     if F8_ISO_MMAX:
-        _mm = np.where(_ok | (_ra == 3), _ma, np.nan)
+        _mm = np.where(_ok | (_ra == _RC['mmax']), _ma, np.nan)
         _lv = [round(x, 1) for x in np.arange(2.2, 4.001, 0.2)
                if np.isfinite(_mm).any() and np.nanmin(_mm) <= round(x, 1) <= np.nanmax(_mm)]
         if _lv:

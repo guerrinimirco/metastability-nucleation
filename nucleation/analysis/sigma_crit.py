@@ -46,14 +46,15 @@ try:
 except Exception:
     _HAVE_JOBLIB = False
 
-# Filter-reason -> integer code. The three filters short-circuit cheap->expensive,
-# so codes are *nested*: contouring this field at 1.5 / 2.5 gives the Witten /
-# no-rehadr pass edges, and 3.5 (== cfl_ok edge) the full-acceptance edge.
-REASON_CODE = {'solve': 0, 'witten': 1, 'rehadr': 2, 'mmax': 3, 'OK': 4,
-               'twoflavor': 5,  # 2-flavor (ud) matter is bound -> nuclei unstable
-               # droplet-level re-hadronization controls (opt-in, see FilterConfig):
-               'rehad_drop': 6,     # P_Q*(n_BH) dips back below P_H after crossing
-               'rehad_strong': 7}   # P_Q*-P_H not monotonically increasing in n_BH
+# Filter-reason -> integer code. The filters short-circuit cheap->expensive, so
+# codes are *nested*: contouring this field at 1.5 / 2.5 gives the Witten / (weak)
+# re-hadronization pass edges, and 4.5 (== cfl_ok edge) the full-acceptance edge.
+# The no-rehadronization filter is the DROPLET test (rehad_pressure_profile): a
+# cell must pass no_rehad (else 'rehadr', "re-hadr.") AND no_rehad_strong (else
+# 'rehad_quasi', "quasi-re-hadr."). merge_rehad_labels folds quasi into 'rehadr'.
+REASON_CODE = {'solve': 0, 'witten': 1, 'rehadr': 2, 'rehad_quasi': 3,
+               'mmax': 4, 'OK': 5,
+               'twoflavor': 6}  # 2-flavor (ud) matter is bound -> nuclei unstable
 
 
 # =============================================================================
@@ -83,19 +84,20 @@ class FilterConfig:
     # over grid cells with joblib, so the fast solver is called serially here
     # (compute_tov_sequence is single-threaded) to avoid numba-threads x joblib oversubscription.
     tov_backend: str = 'scipy'
-    # --- droplet-level re-hadronization controls (opt-in; off by default) --------
-    # Extra acceptance gate on TOP of the bulk-EoS no-rehadronization filter: at each
-    # n_BH we solve the Q* droplet at the local hadronic conditions and require
-    # ΔP = P_Q* - P_H to stay positive past its crossing (weak) and, if rehad_strong,
-    # to be monotonically increasing in n_BH (strong). See rehad_pressure_profile.
-    check_rehad_droplet: bool = False
-    rehad_strong: bool = False            # also require the strong (monotone) condition
-    rehad_flavor: str = 'saddlepoint'     # Q* composition mode for the droplet solve
-    rehad_charge: str = 'gcn'
+    # --- no-rehadronization filter (droplet test) -------------------------------
+    # The rehadronization filter is the DROPLET test: at each hadronic n_BH we solve
+    # the Q* droplet at the local hadronic conditions and require ΔP = P_Q* - P_H to
+    # stay positive past its crossing (no_rehad, 'rehadr') AND to be monotonically
+    # increasing in n_BH (no_rehad_strong, 'rehad_quasi'). Both are acceptance
+    # criteria. H_interp_rehad + n_B_H_grid_rehad are REQUIRED. See
+    # rehad_pressure_profile / rehad_flags.
     H_interp_rehad: dict = None           # hadronic interpolators (e.g. H['betaeq'])
     n_B_H_grid_rehad: np.ndarray = None   # n_BH sweep for the ΔP profile
+    rehad_flavor: str = 'saddlepoint'     # Q* composition mode for the droplet solve
+    rehad_charge: str = 'gcn'
     Y_L_H_rehad: float = None             # trapped only; None for beta-eq
     T_rehad: float = None                 # None -> use T_eos
+    merge_rehad_labels: bool = False      # fold 'rehad_quasi' into 'rehadr' (one zone)
 
 
 @dataclass
@@ -257,12 +259,13 @@ def ud_eps_per_nB(alpha, B4, cfg: FilterConfig):
 
 def passes_cfl_filters(alpha, B4, Delta0, cfg: FilterConfig):
     """(ok, M_max, reason) for the three CFL filters, ordered cheap->expensive:
-    (1) Witten e/n_B|_{P=0} < cfg.e_over_nB_max, (2) P_CFL > P_H on the mu_B
-    overlap, (3) TOV M_max in cfg.M_max_window. M_max is finite once TOV runs."""
+    (1) Witten e/n_B|_{P=0} < cfg.e_over_nB_max, (2) droplet no-rehadronization
+    (both conditions, see _rehad_reason), (3) TOV M_max in cfg.M_max_window.
+    M_max is finite once TOV runs."""
     P_cfl, e_cfl, mu_cfl, ok = cfl_eos_at_params(alpha, B4, Delta0, cfg)
     if ok.sum() < 20:
         return False, np.nan, 'solve'
-    n_ok, P_ok, e_ok, mu_ok = cfg.n_B_grid[ok], P_cfl[ok], e_cfl[ok], mu_cfl[ok]
+    n_ok, P_ok, e_ok = cfg.n_B_grid[ok], P_cfl[ok], e_cfl[ok]
 
     cr = zero_crossing(n_ok, P_ok)
     if cr is None or P_ok[-1] <= 0:
@@ -273,21 +276,9 @@ def passes_cfl_filters(alpha, B4, Delta0, cfg: FilterConfig):
     if e_P0 / n_P0 >= cfg.e_over_nB_max:
         return False, np.nan, 'witten'
 
-    mu_lo = max(mu_ok.min(), cfg.mu_B_H_sorted.min())
-    mu_hi = min(mu_ok.max(), cfg.mu_B_H_sorted.max())
-    if mu_hi <= mu_lo:
-        return False, np.nan, 'rehadr'
-    mu_chk = np.linspace(mu_lo, mu_hi, 500)
-    Pc = interp1d(mu_ok, P_ok, kind='linear', bounds_error=False,
-                  fill_value=np.nan)(mu_chk)
-    Ph = cfg.P_H_of_muB(mu_chk)
-    m = np.isfinite(Pc) & np.isfinite(Ph)
-    if not np.all(Pc[m] > Ph[m]):
-        return False, np.nan, 'rehadr'
-
-    drop = _rehad_droplet_gate(alpha, B4, Delta0, cfg, 'cfl')
-    if drop is not None:
-        return False, np.nan, drop
+    rehad = _rehad_reason(alpha, B4, Delta0, cfg, 'cfl')
+    if rehad is not None:
+        return False, np.nan, rehad
 
     pos = P_ok > 0
     if pos.sum() < 10:
@@ -311,7 +302,8 @@ def passes_unpaired_filters(alpha, B4, cfg: FilterConfig):
     """(ok, M_max, reason) for UNPAIRED strange-quark matter — the filter built
     on the UNPAIRED alpha-Bag EoS (no Delta_0):
 
-      (1) no re-hadronization: P_unp(mu_B) > P_H(mu_B) on the mu_B overlap;
+      (1) droplet no-rehadronization (both conditions, see _rehad_reason), built
+          on the UNPAIRED Q* droplet;
       (2) TOV M_max in cfg.M_max_window, structure integrated with the
           UNPAIRED quark EoS (not CFL).
 
@@ -321,24 +313,12 @@ def passes_unpaired_filters(alpha, B4, cfg: FilterConfig):
     P_q, e_q, mu_q, ok = unpaired_eos_at_params(alpha, B4, cfg)
     if ok.sum() < 20:
         return False, np.nan, 'solve'
-    n_ok, P_ok, e_ok, mu_ok = cfg.n_B_grid[ok], P_q[ok], e_q[ok], mu_q[ok]
+    n_ok, P_ok, e_ok = cfg.n_B_grid[ok], P_q[ok], e_q[ok]
 
-    # (1) no re-hadronization — P_unp must exceed P_H on the mu_B overlap.
-    mu_lo = max(mu_ok.min(), cfg.mu_B_H_sorted.min())
-    mu_hi = min(mu_ok.max(), cfg.mu_B_H_sorted.max())
-    if mu_hi <= mu_lo:
-        return False, np.nan, 'rehadr'
-    mu_chk = np.linspace(mu_lo, mu_hi, 500)
-    Pc = interp1d(mu_ok, P_ok, kind='linear', bounds_error=False,
-                  fill_value=np.nan)(mu_chk)
-    Ph = cfg.P_H_of_muB(mu_chk)
-    m = np.isfinite(Pc) & np.isfinite(Ph)
-    if not np.all(Pc[m] > Ph[m]):
-        return False, np.nan, 'rehadr'
-
-    drop = _rehad_droplet_gate(alpha, B4, None, cfg, 'unpaired')
-    if drop is not None:
-        return False, np.nan, drop
+    # (1) droplet no-rehadronization (weak + strong).
+    rehad = _rehad_reason(alpha, B4, None, cfg, 'unpaired')
+    if rehad is not None:
+        return False, np.nan, rehad
 
     # (2) M_max from the UNPAIRED quark EoS.
     pos = P_ok > 0
@@ -439,16 +419,16 @@ def rehad_flags(n_B_H_grid, dP):
     return no_rehad, no_rehad_strong, n_BH_cross
 
 
-def _rehad_droplet_gate(alpha, B4, Delta0, cfg: FilterConfig, quark_phase):
-    """Opt-in droplet re-hadronization gate for the grid filters.
+def _rehad_reason(alpha, B4, Delta0, cfg: FilterConfig, quark_phase):
+    """Droplet no-rehadronization filter reason for one cell.
 
-    Returns None if the cell passes (or the gate is off), else the failing reason
-    ('rehad_drop' / 'rehad_strong'). Solves the Q* droplet along cfg.n_B_H_grid_rehad
-    at the local hadronic conditions and applies rehad_flags."""
-    if not cfg.check_rehad_droplet:
-        return None
+    None if the cell passes BOTH conditions, else the failing reason:
+      'rehadr'      -- no_rehad fails (ΔP dips back below P_H after crossing);
+      'rehad_quasi' -- no_rehad passes but ΔP is not monotone in n_BH.
+    With cfg.merge_rehad_labels both map to 'rehadr'. Solves the Q* droplet along
+    cfg.n_B_H_grid_rehad at the local hadronic conditions (rehad_pressure_profile)."""
     if cfg.H_interp_rehad is None or cfg.n_B_H_grid_rehad is None:
-        raise ValueError("check_rehad_droplet=True needs H_interp_rehad and "
+        raise ValueError("the re-hadronization filter needs H_interp_rehad and "
                          "n_B_H_grid_rehad set on the FilterConfig")
     params = get_alphabag_custom(alpha=alpha, B4=B4, m_s=cfg.m_s)
     T = cfg.T_eos if cfg.T_rehad is None else cfg.T_rehad
@@ -459,9 +439,9 @@ def _rehad_droplet_gate(alpha, B4, Delta0, cfg: FilterConfig, quark_phase):
         Delta0=Delta0)
     no_re, strong, _ = rehad_flags(cfg.n_B_H_grid_rehad, dP)
     if not no_re:
-        return 'rehad_drop'
-    if cfg.rehad_strong and not strong:
-        return 'rehad_strong'
+        return 'rehadr'
+    if not strong:
+        return 'rehadr' if cfg.merge_rehad_labels else 'rehad_quasi'
     return None
 
 
@@ -707,13 +687,13 @@ _filter_cache = {}
 
 
 def _rehad_key(cfg: FilterConfig):
-    # Scalar signature of the droplet-rehad controls for cache invalidation.
-    # ponytail: keys on grid (len,min,max) not identity of H_interp/n_B_H_grid;
-    # pass reuse=False if you swap the H interpolators without touching a scalar.
-    if not cfg.check_rehad_droplet:
-        return (False,)
-    g = np.asarray(cfg.n_B_H_grid_rehad, float)
-    return (True, bool(cfg.rehad_strong), cfg.rehad_flavor, cfg.rehad_charge,
+    # Scalar signature of the no-rehadronization (droplet) filter for cache
+    # invalidation. ponytail: keys on grid (len,min,max) not identity of
+    # H_interp/n_B_H_grid; pass reuse=False if you swap the H interpolators
+    # without touching a scalar.
+    g = (np.asarray(cfg.n_B_H_grid_rehad, float)
+         if cfg.n_B_H_grid_rehad is not None else np.array([]))
+    return (bool(cfg.merge_rehad_labels), cfg.rehad_flavor, cfg.rehad_charge,
             cfg.Y_L_H_rehad, cfg.T_rehad,
             (len(g), float(g.min()), float(g.max())) if g.size else ())
 
@@ -793,8 +773,7 @@ def scan_cfl_filters(alpha_slices, B4_grid, Delta0_grid, cfg: FilterConfig,
               f"pass {npass}/{len(idx)} ({100*npass/max(len(idx),1):.0f}%), {mr}\n"
               f"    rejected -> no CFL solve: {c['solve']}, "
               f"Witten (unstable / e/nB>{cfg.e_over_nB_max:g}): {c['witten']}, "
-              f"re-hadronizes (P_CFL<P_H): {c['rehadr']}, "
-              f"droplet re-hadr: {c['rehad_drop']}, not monotone: {c['rehad_strong']}, "
+              f"re-hadr: {c['rehadr']}, quasi-re-hadr: {c['rehad_quasi']}, "
               f"M_max outside {cfg.M_max_window}: {c['mmax']}, "
               f"2-flavor bound (e/nB<={cfg.e_over_nB_2flavor:g}): {c['twoflavor']}",
               flush=True)
@@ -847,8 +826,8 @@ def scan_unpaired_filters(alpha_slices, B4_grid, cfg: FilterConfig,
         c = {n: int((rs == k).sum()) for n, k in REASON_CODE.items()}
         print(f"  Unpaired filter done in {time.perf_counter()-t0:.1f}s: "
               f"pass {npass}/{len(idx)} ({100*npass/max(len(idx),1):.0f}%); "
-              f"rejected -> no solve: {c['solve']}, re-hadronizes: {c['rehadr']}, "
-              f"droplet re-hadr: {c['rehad_drop']}, not monotone: {c['rehad_strong']}, "
+              f"rejected -> no solve: {c['solve']}, re-hadr: {c['rehadr']}, "
+              f"quasi-re-hadr: {c['rehad_quasi']}, "
               f"M_max outside {cfg.M_max_window}: {c['mmax']}", flush=True)
     _filter_cache[key] = (cfl, mm, rs)
     return cfl, mm, rs
@@ -1022,8 +1001,8 @@ def plot_sigma_crit_grid(B4_grid, Delta0_grid, alpha_slices, sig_crit, cfl_ok,
         # In-region text labels (replace the legend): centroid of each region's cells.
         for mask, txt, col in [(ra == REASON_CODE['mmax'], r'$M_{\max}<2$', '0.2'),
                                (ra == REASON_CODE['twoflavor'], '2-flavor\nbound', 'darkred'),
-                               (ra == REASON_CODE['rehad_drop'], 'droplet\nre-hadr', 'navy'),
-                               (ra == REASON_CODE['rehad_strong'], 'not\nmonotone', 'purple'),
+                               (ra == REASON_CODE['rehadr'], 're-hadr.', 'navy'),
+                               (ra == REASON_CODE['rehad_quasi'], 'quasi-\nre-hadr.', 'purple'),
                                (ca & np.isnan(sa), 'no nucleation', 'saddlebrown'),
                                (ca & np.isposinf(sa), r'$\sigma_{\rm c}>\sigma_{\rm hi}$', 'teal')]:
             if mask.any():
