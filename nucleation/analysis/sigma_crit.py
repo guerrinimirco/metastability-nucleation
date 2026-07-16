@@ -50,7 +50,10 @@ except Exception:
 # so codes are *nested*: contouring this field at 1.5 / 2.5 gives the Witten /
 # no-rehadr pass edges, and 3.5 (== cfl_ok edge) the full-acceptance edge.
 REASON_CODE = {'solve': 0, 'witten': 1, 'rehadr': 2, 'mmax': 3, 'OK': 4,
-               'twoflavor': 5}  # 2-flavor (ud) matter is bound -> nuclei unstable
+               'twoflavor': 5,  # 2-flavor (ud) matter is bound -> nuclei unstable
+               # droplet-level re-hadronization controls (opt-in, see FilterConfig):
+               'rehad_drop': 6,     # P_Q*(n_BH) dips back below P_H after crossing
+               'rehad_strong': 7}   # P_Q*-P_H not monotonically increasing in n_BH
 
 
 # =============================================================================
@@ -80,6 +83,19 @@ class FilterConfig:
     # over grid cells with joblib, so the fast solver is called serially here
     # (compute_tov_sequence is single-threaded) to avoid numba-threads x joblib oversubscription.
     tov_backend: str = 'scipy'
+    # --- droplet-level re-hadronization controls (opt-in; off by default) --------
+    # Extra acceptance gate on TOP of the bulk-EoS no-rehadronization filter: at each
+    # n_BH we solve the Q* droplet at the local hadronic conditions and require
+    # ΔP = P_Q* - P_H to stay positive past its crossing (weak) and, if rehad_strong,
+    # to be monotonically increasing in n_BH (strong). See rehad_pressure_profile.
+    check_rehad_droplet: bool = False
+    rehad_strong: bool = False            # also require the strong (monotone) condition
+    rehad_flavor: str = 'saddlepoint'     # Q* composition mode for the droplet solve
+    rehad_charge: str = 'gcn'
+    H_interp_rehad: dict = None           # hadronic interpolators (e.g. H['betaeq'])
+    n_B_H_grid_rehad: np.ndarray = None   # n_BH sweep for the ΔP profile
+    Y_L_H_rehad: float = None             # trapped only; None for beta-eq
+    T_rehad: float = None                 # None -> use T_eos
 
 
 @dataclass
@@ -269,6 +285,10 @@ def passes_cfl_filters(alpha, B4, Delta0, cfg: FilterConfig):
     if not np.all(Pc[m] > Ph[m]):
         return False, np.nan, 'rehadr'
 
+    drop = _rehad_droplet_gate(alpha, B4, Delta0, cfg, 'cfl')
+    if drop is not None:
+        return False, np.nan, drop
+
     pos = P_ok > 0
     if pos.sum() < 10:
         return False, np.nan, 'mmax'
@@ -315,6 +335,10 @@ def passes_unpaired_filters(alpha, B4, cfg: FilterConfig):
     m = np.isfinite(Pc) & np.isfinite(Ph)
     if not np.all(Pc[m] > Ph[m]):
         return False, np.nan, 'rehadr'
+
+    drop = _rehad_droplet_gate(alpha, B4, None, cfg, 'unpaired')
+    if drop is not None:
+        return False, np.nan, drop
 
     # (2) M_max from the UNPAIRED quark EoS.
     pos = P_ok > 0
@@ -413,6 +437,32 @@ def rehad_flags(n_B_H_grid, dP):
     n_BH_cross = float(n[cross_idx])
     no_rehad = bool(np.all(d[cross_idx + 1:] > 0.0))
     return no_rehad, no_rehad_strong, n_BH_cross
+
+
+def _rehad_droplet_gate(alpha, B4, Delta0, cfg: FilterConfig, quark_phase):
+    """Opt-in droplet re-hadronization gate for the grid filters.
+
+    Returns None if the cell passes (or the gate is off), else the failing reason
+    ('rehad_drop' / 'rehad_strong'). Solves the Q* droplet along cfg.n_B_H_grid_rehad
+    at the local hadronic conditions and applies rehad_flags."""
+    if not cfg.check_rehad_droplet:
+        return None
+    if cfg.H_interp_rehad is None or cfg.n_B_H_grid_rehad is None:
+        raise ValueError("check_rehad_droplet=True needs H_interp_rehad and "
+                         "n_B_H_grid_rehad set on the FilterConfig")
+    params = get_alphabag_custom(alpha=alpha, B4=B4, m_s=cfg.m_s)
+    T = cfg.T_eos if cfg.T_rehad is None else cfg.T_rehad
+    _, dP = rehad_pressure_profile(
+        cfg.H_interp_rehad, params, cfg.n_B_H_grid_rehad,
+        Y_L_H=cfg.Y_L_H_rehad, T=T, flavor_mode=cfg.rehad_flavor,
+        electric_charge_mode=cfg.rehad_charge, quark_phase=quark_phase,
+        Delta0=Delta0)
+    no_re, strong, _ = rehad_flags(cfg.n_B_H_grid_rehad, dP)
+    if not no_re:
+        return 'rehad_drop'
+    if cfg.rehad_strong and not strong:
+        return 'rehad_strong'
+    return None
 
 
 def replay_cfl(alpha, B4, Delta0, cfg: FilterConfig, e_c_vec=None):
@@ -656,13 +706,26 @@ def sigma_target_pt(H_pt, T_c, flavor, charge, phase, params, Delta0, nuc: NucCo
 _filter_cache = {}
 
 
+def _rehad_key(cfg: FilterConfig):
+    # Scalar signature of the droplet-rehad controls for cache invalidation.
+    # ponytail: keys on grid (len,min,max) not identity of H_interp/n_B_H_grid;
+    # pass reuse=False if you swap the H interpolators without touching a scalar.
+    if not cfg.check_rehad_droplet:
+        return (False,)
+    g = np.asarray(cfg.n_B_H_grid_rehad, float)
+    return (True, bool(cfg.rehad_strong), cfg.rehad_flavor, cfg.rehad_charge,
+            cfg.Y_L_H_rehad, cfg.T_rehad,
+            (len(g), float(g.min()), float(g.max())) if g.size else ())
+
+
 def _grid_key(alpha_slices, B4_grid, Delta0_grid, cfg: FilterConfig):
     # Include the acceptance constants so the cache invalidates when they change.
     return (tuple(np.round(np.atleast_1d(alpha_slices), 6)),
             tuple(np.round(np.asarray(B4_grid), 6)),
             tuple(np.round(np.asarray(Delta0_grid), 6)),
             float(cfg.m_s), tuple(cfg.M_max_window), float(cfg.e_over_nB_max),
-            bool(cfg.check_2flavor), float(cfg.e_over_nB_2flavor))
+            bool(cfg.check_2flavor), float(cfg.e_over_nB_2flavor),
+            _rehad_key(cfg))
 
 
 def scan_cfl_filters(alpha_slices, B4_grid, Delta0_grid, cfg: FilterConfig,
@@ -731,6 +794,7 @@ def scan_cfl_filters(alpha_slices, B4_grid, Delta0_grid, cfg: FilterConfig,
               f"    rejected -> no CFL solve: {c['solve']}, "
               f"Witten (unstable / e/nB>{cfg.e_over_nB_max:g}): {c['witten']}, "
               f"re-hadronizes (P_CFL<P_H): {c['rehadr']}, "
+              f"droplet re-hadr: {c['rehad_drop']}, not monotone: {c['rehad_strong']}, "
               f"M_max outside {cfg.M_max_window}: {c['mmax']}, "
               f"2-flavor bound (e/nB<={cfg.e_over_nB_2flavor:g}): {c['twoflavor']}",
               flush=True)
@@ -751,7 +815,7 @@ def scan_unpaired_filters(alpha_slices, B4_grid, cfg: FilterConfig,
     alpha_slices = np.atleast_1d(np.asarray(alpha_slices, float))
     key = ('unpaired', tuple(np.round(alpha_slices, 6)),
            tuple(np.round(np.asarray(B4_grid), 6)),
-           float(cfg.m_s), tuple(cfg.M_max_window))
+           float(cfg.m_s), tuple(cfg.M_max_window), _rehad_key(cfg))
     if reuse and key in _filter_cache:
         if verbose:
             print("Unpaired filter: reusing cached grid result.", flush=True)
@@ -784,6 +848,7 @@ def scan_unpaired_filters(alpha_slices, B4_grid, cfg: FilterConfig,
         print(f"  Unpaired filter done in {time.perf_counter()-t0:.1f}s: "
               f"pass {npass}/{len(idx)} ({100*npass/max(len(idx),1):.0f}%); "
               f"rejected -> no solve: {c['solve']}, re-hadronizes: {c['rehadr']}, "
+              f"droplet re-hadr: {c['rehad_drop']}, not monotone: {c['rehad_strong']}, "
               f"M_max outside {cfg.M_max_window}: {c['mmax']}", flush=True)
     _filter_cache[key] = (cfl, mm, rs)
     return cfl, mm, rs
@@ -957,6 +1022,8 @@ def plot_sigma_crit_grid(B4_grid, Delta0_grid, alpha_slices, sig_crit, cfl_ok,
         # In-region text labels (replace the legend): centroid of each region's cells.
         for mask, txt, col in [(ra == REASON_CODE['mmax'], r'$M_{\max}<2$', '0.2'),
                                (ra == REASON_CODE['twoflavor'], '2-flavor\nbound', 'darkred'),
+                               (ra == REASON_CODE['rehad_drop'], 'droplet\nre-hadr', 'navy'),
+                               (ra == REASON_CODE['rehad_strong'], 'not\nmonotone', 'purple'),
                                (ca & np.isnan(sa), 'no nucleation', 'saddlebrown'),
                                (ca & np.isposinf(sa), r'$\sigma_{\rm c}>\sigma_{\rm hi}$', 'teal')]:
             if mask.any():

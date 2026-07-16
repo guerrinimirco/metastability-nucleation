@@ -76,3 +76,14 @@ def test_rehad_flags_synthetic():
     d4 = n - 0.9
     d4[2] = np.nan
     assert rehad_flags(n, d4)[0]
+
+
+def test_rehad_pressure_profile_smoke(H_interp, params):
+    """rehad_pressure_profile runs on the real trapped EoS and returns ΔP."""
+    from nucleation.analysis.sigma_crit import rehad_pressure_profile
+    n_grid = np.linspace(0.4, 1.2, 6) * 0.16   # ~2.5..7.5 n_sat span in fm^-3
+    n, dP = rehad_pressure_profile(
+        H_interp, params, n_grid, Y_L_H=0.25, T=25.0,
+        flavor_mode='saddlepoint', electric_charge_mode='gcn')
+    assert n.shape == dP.shape == n_grid.shape
+    assert np.isfinite(dP).any()   # at least some Q* solves converge
