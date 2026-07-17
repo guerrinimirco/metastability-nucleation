@@ -1067,8 +1067,11 @@ def _regime_grid(sig_crit, alpha_slices, B4_grid, Delta0_grid, MT0, slices=None,
 # NB_SHELL_MIN up to the star centre, not just at r=0 — the centre is NOT always
 # the easiest nucleation site (|Δf| peaks near ~2 n_sat close to the SQM-stability
 # corner, so outer shells can nucleate at σ where the centre is already quiet).
-# N_SHELLS=1 recovers the old centre-only definition.
-N_SHELLS     = 12
+# N_SHELLS=1 recovers the old centre-only definition. 6 shells is CONVERGED
+# (σ_crit matches 12 shells to <0.5%; the controlling shell sits at the broad
+# Δf peak ~2 n_sat) at ~2.9× centre-only cost (early-exit keeps nucleating-σ
+# points ~1 shell; 12 shells is ~5.7× for no accuracy gain).
+N_SHELLS     = 6
 NB_SHELL_MIN = 0.25          # fm^-3 (~1.6 n_sat) — lowest shell checked
 
 def _run_scan(MT0s, fl, ch, ph, do_plot=True):
@@ -2743,6 +2746,175 @@ ax.set_title(rf'unpaired $\sigma_{{\rm crit}}$ — $m_s={U_MS:.0f}$ MeV, '
              rf'$\tau={tau_target*1e3:g}$ ms — {xsd_tag}')
 fig.colorbar(pcm, ax=ax, label=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]')
 fig.tight_layout(); plt.show()
+
+# %% [markdown]
+# ### UNPAIRED $\sigma_{\rm crit}(B^{1/4},\alpha_s)$ — three $m_s$ panels (full Fig. 8 layers)
+#
+# Same unpaired heatmap as above, one panel per strange-quark mass, carrying the
+# same toggleable layers as Paper Fig. 8 — but every quantity is the **unpaired
+# $\beta$-eq quark EoS**, never CFL (no $\Delta_0$, no pairing):
+# - **heatmap + iso-$\sigma_{\rm crit}$** — $\sigma_{\rm crit}$ fill with black
+#   iso-lines (50–250 MeV/fm²);
+# - **iso-$M_{\max}$** — white dashed lines (every 0.2 $M_\odot$ above 2), from the
+#   **unpaired**-TOV $M_{\max}$ on the mass-relevant cells;
+# - **reject outlines** — coloured boundaries of the non-viable zones the unpaired
+#   filter emits: vermillion $M_{\max}<2M_\odot$, blue re-hadr., purple quasi-re-hadr.,
+#   grey no-solve (the unpaired gate has NO Witten/2-flavour column, by design);
+# - **stability lines** — the two window bounds drawn as curves: green = **unpaired
+#   3-flavour SQM absolute-stability** ($e/n_B|_{P=0}=930$, Witten), grey = **2-flavour
+#   stability** ($e/n_B|_{P=0}=930$ of $ud$ matter). Both from the bulk EoS at $P=0$
+#   (root-found per $\alpha_s$ on a coarse grid), NOT gates — they only annotate.
+# - yellow stars mark the tabulated sets at that $m_s$.
+
+# %%
+# ============================================================================
+#  UNPAIRED sigma_crit(B^1/4, alpha_s), one panel per m_s, full Fig-8 layer set.
+#  scan_unpaired_filters gives (viable, M_max, reason) FREE -> iso-M_max + reject
+#  outlines. The Witten (3-flavour unpaired SQM) and 2-flavour stability lines are
+#  the only extra physics: e/n_B at P=0 vs 930 MeV, root-found in B^1/4 per alpha.
+# ============================================================================
+import dataclasses
+from scipy.optimize import brentq
+# ---- user-configurable inputs ----------------------------------------------
+U3_MS_LIST     = [80.0, 100.0, 150.0]            # three strange-quark masses [MeV]
+U3_MT0         = U_MT0                            # nucleation-threshold grav. mass [M_sun]
+U3_CHARGE      = U_CHARGE                         # charge prescription (as single-m_s cell)
+U3_ALPHA_GRID  = U_ALPHA_GRID                     # alpha_s   (y-axis) — reuse cell above
+U3_B4_GRID     = U_B4_GRID                        # B^1/4 [MeV] (x-axis)
+U3_NJOBS       = -1
+# ---- layer toggles: set any False to drop that layer -----------------------
+U3_ISO_SIGMA   = True     # black iso-sigma_crit contour lines
+U3_ISO_MMAX    = True     # white dashed iso-M_max lines (unpaired TOV)
+U3_REJECT      = True      # coloured reject-zone boundary outlines + labels
+U3_WITTEN      = True      # green line: unpaired 3-flavour SQM abs.-stability (e/n_B=930)
+U3_TWOFLAV     = True      # grey line: 2-flavour stability (ud e/n_B=930)
+U3_STAB_NALPHA = 13        # alpha_s samples for the two stability curves (coarse=cheap)
+# -----------------------------------------------------------------------------
+# excluded-region reason -> (colour, label). Only the reasons the UNPAIRED filter
+# can emit (no witten/twoflavor gate here); colours echo the Fig-8 Okabe-Ito set.
+_RC3 = nuc_an.REASON_CODE
+_C3  = dict(mmax='#D55E00', rehadr='#0072B2', rehad_quasi='#CC79A7', solve='#9a9a9a',
+            witten='#009E73', twoflav='#8a8a8a')
+_RSPEC3 = [(_RC3['mmax'],        _C3['mmax'],        r'$M_{\rm QS}^{\rm max}<2M_\odot$'),
+           (_RC3['rehadr'],      _C3['rehadr'],      're-hadr.'),
+           (_RC3['rehad_quasi'], _C3['rehad_quasi'], 'quasi-\nre-hadr.'),
+           (_RC3['solve'],       _C3['solve'],       'no solve')]
+
+def _ea_unp_P0(alpha, B4, ms):
+    """e/n_B [MeV] at P=0 of UNPAIRED 3-flavour beta-eq SQM (= Witten energy per
+    baryon). nan if the EoS has no P=0 crossing on the grid."""
+    cfg = dataclasses.replace(_filt_cfg, m_s=ms)
+    P, e, _mu, ok = nuc_an.unpaired_eos_at_params(alpha, B4, cfg)
+    n, P, e = cfg.n_B_grid[ok], P[ok], e[ok]
+    if n.size < 5:
+        return np.nan
+    cr = nuc_an.zero_crossing(n, P)
+    if cr is None:
+        return np.nan
+    j, fr = cr
+    nP0 = n[j] + fr * (n[j + 1] - n[j]); eP0 = e[j] + fr * (e[j + 1] - e[j])
+    return float(eP0 / nP0) if nP0 > 0 else np.nan
+
+def _B_at_930(scalar, alpha, lo, hi):
+    """B^1/4 where scalar(alpha, B)=930 MeV, or nan if no single crossing brackets
+    in [lo,hi] (e/n_B rises with B, so one clean root)."""
+    f = lambda b: scalar(alpha, b) - 930.0
+    flo, fhi = f(lo), f(hi)
+    if not (np.isfinite(flo) and np.isfinite(fhi)) or flo * fhi > 0:
+        return np.nan
+    return brentq(f, lo, hi, xtol=0.05)
+
+# per-m_s: unpaired viability + M_max + reason (FREE) and sigma_crit at the PNS
+# centre. Same two engine calls as the single-panel cell; drop the singleton D0 axis.
+_u3 = []
+for _ms in U3_MS_LIST:
+    _cfg = dataclasses.replace(_filt_cfg, m_s=_ms)
+    _ok, _mm, _rs = nuc_an.scan_unpaired_filters(U3_ALPHA_GRID, U3_B4_GRID, _cfg, n_jobs=U3_NJOBS)
+    _sig = nuc_an.compute_sigma_crit(
+        _ok, U3_MT0, 'saddlepoint', U3_CHARGE, 'unpaired',
+        U3_ALPHA_GRID, U3_B4_GRID, [100.0], _star, _nuc_cfg, m_s=_ms, n_jobs=U3_NJOBS)
+    _u3.append((_sig[:, 0, :], _ok[:, 0, :], _mm[:, 0, :], _rs[:, 0, :]))
+
+# shared colour scale across the three panels (finite sigma_crit only)
+_allfin = np.concatenate([s[np.isfinite(s)] for s, _, _, _ in _u3])
+_v3min, _v3max = (float(_allfin.min()), float(_allfin.max())) if _allfin.size else (0.0, 1.0)
+
+# stability curves: coarse alpha grid, root-found in B^1/4. 2-flavour is m_s-
+# INDEPENDENT (no strange quarks) -> compute once; Witten is per-m_s.
+# ponytail: serial root-find over U3_STAB_NALPHA alphas; bump it if a line looks jagged.
+_stab_al = np.linspace(U3_ALPHA_GRID.min(), U3_ALPHA_GRID.max(), U3_STAB_NALPHA)
+_lo3, _hi3 = float(U3_B4_GRID.min()), float(U3_B4_GRID.max())
+_B2flav = (np.array([_B_at_930(lambda a, b: nuc_an.ud_eps_per_nB(a, b, _filt_cfg), al,
+                               _lo3, _hi3) for al in _stab_al])
+           if U3_TWOFLAV else None)
+
+set_paper_style()
+fig, axes = plt.subplots(1, len(U3_MS_LIST), figsize=(5.25 * len(U3_MS_LIST), 4.8),
+                         squeeze=False, constrained_layout=True)
+pcm = None
+for _c, (_ms, (_sig, _ok, _mm, _rs)) in enumerate(zip(U3_MS_LIST, _u3)):
+    ax = axes[0, _c]; ax.set_box_aspect(1)               # square panels, like Fig 8
+    pcm = ax.pcolormesh(U3_B4_GRID, U3_ALPHA_GRID, np.ma.masked_invalid(_sig),
+                        cmap='viridis', vmin=_v3min, vmax=_v3max, shading='nearest', zorder=2)
+    # (1) iso-sigma_crit contour lines (black), only levels inside this panel's range
+    if U3_ISO_SIGMA:
+        _lv = [l for l in (50, 100, 150, 200, 250)
+               if np.isfinite(_sig).any() and np.nanmin(_sig) <= l <= np.nanmax(_sig)]
+        if _lv:
+            _cs = ax.contour(U3_B4_GRID, U3_ALPHA_GRID, _sig, levels=_lv,
+                             colors='k', linewidths=0.7, alpha=0.6, zorder=3)
+            ax.clabel(_cs, fmt='%.0f', fontsize=11, inline=True)
+    # (2) iso-M_max (white dashed) on the mass-relevant cells (viable + the M<2 band)
+    if U3_ISO_MMAX:
+        _mmv = np.where(_ok | (_rs == _RC3['mmax']), _mm, np.nan)
+        _lvm = [round(x, 1) for x in np.arange(2.2, 4.001, 0.2)
+                if np.isfinite(_mmv).any() and np.nanmin(_mmv) <= round(x, 1) <= np.nanmax(_mmv)]
+        if _lvm:
+            _cm = ax.contour(U3_B4_GRID, U3_ALPHA_GRID, _mmv, levels=_lvm, colors='white',
+                             linewidths=0.9, linestyles='--', alpha=0.9, zorder=3.5)
+            ax.clabel(_cm, fmt='%.1f', fontsize=11, inline=True)
+    # (3) reject-zone boundary outlines + labels (only reasons the unpaired gate emits)
+    if U3_REJECT:
+        for _code, _col, _lab in _RSPEC3:
+            _m = _rs == _code
+            if not _m.any():
+                continue
+            ax.contour(U3_B4_GRID, U3_ALPHA_GRID, _m.astype(float), levels=[0.5],
+                       colors=[_col], linewidths=2.2, zorder=4)
+            _r, _cc = np.where(_m)
+            ax.text(np.median(U3_B4_GRID[_cc]), np.median(U3_ALPHA_GRID[_r]), _lab,
+                    color=_col, fontsize=8.5, fontweight='bold', ha='center',
+                    va='center', zorder=7)
+    # (4) 2-flavour stability line (grey) — ud e/n_B|_{P=0}=930, m_s-independent
+    if U3_TWOFLAV and _B2flav is not None and np.isfinite(_B2flav).any():
+        ax.plot(_B2flav, _stab_al, color=_C3['twoflav'], lw=2.4, zorder=4.5)
+        _k = np.isfinite(_B2flav)
+        ax.text(_B2flav[_k][-1], _stab_al[_k][-1], ' 2 flav.\n stability', color=_C3['twoflav'],
+                fontsize=8.5, fontweight='bold', ha='left', va='center', zorder=7)
+    # (5) Witten line (green) — unpaired 3-flavour SQM e/n_B|_{P=0}=930 (abs. stable left of it)
+    if U3_WITTEN:
+        _Bw = np.array([_B_at_930(lambda a, b: _ea_unp_P0(a, b, _ms), al, _lo3, _hi3)
+                        for al in _stab_al])
+        if np.isfinite(_Bw).any():
+            ax.plot(_Bw, _stab_al, color=_C3['witten'], lw=2.4, zorder=4.5)
+            _k = np.isfinite(_Bw)
+            ax.text(_Bw[_k][0], _stab_al[_k][0], 'SQM not\nabs. stable ', color=_C3['witten'],
+                    fontsize=8.5, fontweight='bold', ha='right', va='center', zorder=7)
+    for p in quark_param_sets:                            # mark tabulated sets at this m_s
+        if abs(p['m_s'] - _ms) < 1.0:
+            ax.scatter([p['B4']], [p['alpha']], s=120, marker='*',
+                       c='yellow', edgecolors='k', zorder=6)
+    ax.set_title(rf"$m_s={_ms:.0f}$ MeV")
+    ax.set_xlabel(r'$B^{1/4}$ [MeV]'); ax.set_ylabel(r'$\alpha_s$')
+    ax.set_xlim(U3_B4_GRID.min(), U3_B4_GRID.max())
+    ax.set_ylim(U3_ALPHA_GRID.min(), U3_ALPHA_GRID.max())
+    panel_label(ax, f"({chr(97 + _c)})")
+fig.colorbar(pcm, ax=axes.ravel().tolist(), label=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]',
+             shrink=0.9)
+fig.suptitle(rf"unpaired $\sigma_{{\rm crit}}$ — $M_{{T0}}={U3_MT0:g}\,M_\odot$, "
+             rf"$Y_L={YLH}$, $S={S}$, $\tau={tau_target*1e3:g}$ ms — {xsd_tag}", y=1.02)
+fig.savefig(f'../output/figures/sigcrit_unpaired_ms_panels_{xsd_tag}.pdf', bbox_inches='tight')
+plt.show()
 
 # %% [markdown]
 # ## Electromagnetic screening — reproducing the thesis "screen" figure

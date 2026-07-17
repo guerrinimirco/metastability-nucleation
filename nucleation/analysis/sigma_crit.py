@@ -298,23 +298,47 @@ def passes_unpaired_filters(alpha, B4, cfg: FilterConfig):
 
       (1) bulk no-rehadronization on ΔP(mu_B)=P_unp-P_H at T=0 (both conditions,
           see _rehad_reason), built on the UNPAIRED quark EoS;
-      (2) TOV M_max in cfg.M_max_window, structure integrated with the
-          UNPAIRED quark EoS (not CFL).
+      (2) Witten bound: unpaired 3-flavor SQM absolutely stable,
+          e/n_B|_{P=0} < cfg.e_over_nB_max;
+      (3) bulk no-rehadronization on Delta P(mu_B) = P_unp - P_H at T=0
+          (both weak and strong conditions, see ``_rehad_reason``);
+      (4) 2-flavor (ud) matter NOT bound (else ordinary nuclei would decay):
+          e/n_B|_{P=0} > cfg.e_over_nB_2flavor (skipped if not cfg.check_2flavor);
+      (5) TOV M_max in cfg.M_max_window, structure integrated with the
+          UNPAIRED quark EoS.
 
-    Unlike ``passes_cfl_filters`` there is no Witten / 2-flavour column here and
-    no Delta_0 anywhere: the whole point is that the unpaired sigma_crit map is
-    gap-independent, so its viability gate must be too."""
+    The FULL two-families acceptance, with every test built on the UNPAIRED
+    EoS -- CFL/Delta_0 never enters (the unpaired sigma_crit map is
+    gap-independent, so its viability gate must be too). Ordered
+    cheap -> expensive; codes shared with ``passes_cfl_filters``."""
     P_q, e_q, mu_q, ok = unpaired_eos_at_params(alpha, B4, cfg)
     if ok.sum() < 20:
         return False, np.nan, 'solve'
     n_ok, P_ok, e_ok, mu_ok = cfg.n_B_grid[ok], P_q[ok], e_q[ok], mu_q[ok]
 
-    # (1) bulk no-rehadronization (weak + strong).
+    # (2) Witten: unpaired SQM must be absolutely stable (e/nB at P=0 < bound).
+    cr = zero_crossing(n_ok, P_ok)
+    if cr is None or P_ok[-1] <= 0:
+        return False, np.nan, 'witten'
+    j, fr = cr
+    n_P0 = n_ok[j] + fr * (n_ok[j + 1] - n_ok[j])
+    e_P0 = e_ok[j] + fr * (e_ok[j + 1] - e_ok[j])
+    if e_P0 / n_P0 >= cfg.e_over_nB_max:
+        return False, np.nan, 'witten'
+
+    # (3) bulk no-rehadronization (weak + strong).
     rehad = _rehad_reason(mu_ok, P_ok, cfg)
     if rehad is not None:
         return False, np.nan, rehad
 
-    # (2) M_max from the UNPAIRED quark EoS.
+    # (4) 2-flavor (ud) stability: bound ud matter would destabilise nuclei.
+    #     Gap-free by construction (no strange quarks), so genuinely unpaired.
+    if cfg.check_2flavor:
+        v = ud_eps_per_nB(alpha, B4, cfg)
+        if np.isfinite(v) and v <= cfg.e_over_nB_2flavor:
+            return False, np.nan, 'twoflavor'
+
+    # (5) M_max from the UNPAIRED quark EoS.
     pos = P_ok > 0
     if pos.sum() < 10:
         return False, np.nan, 'mmax'
@@ -831,7 +855,9 @@ def scan_unpaired_filters(alpha_slices, B4_grid, cfg: FilterConfig,
     alpha_slices = np.atleast_1d(np.asarray(alpha_slices, float))
     key = ('unpaired', tuple(np.round(alpha_slices, 6)),
            tuple(np.round(np.asarray(B4_grid), 6)),
-           float(cfg.m_s), tuple(cfg.M_max_window), _rehad_key(cfg))
+           float(cfg.m_s), tuple(cfg.M_max_window), float(cfg.e_over_nB_max),
+           bool(cfg.check_2flavor), float(cfg.e_over_nB_2flavor),
+           _rehad_key(cfg))
     if reuse and key in _filter_cache:
         if verbose:
             print("Unpaired filter: reusing cached grid result.", flush=True)
