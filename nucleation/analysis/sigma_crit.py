@@ -49,7 +49,7 @@ except Exception:
 # Filter-reason -> integer code. The filters short-circuit cheap->expensive, so
 # codes are *nested*: contouring this field at 1.5 / 2.5 gives the Witten / (weak)
 # re-hadronization pass edges, and 4.5 (== cfl_ok edge) the full-acceptance edge.
-# The no-rehadronization filter is the DROPLET test (rehad_pressure_profile): a
+# The no-rehadronization filter is the bulk ΔP(mu_B)=P_quark-P_H test at T=0: a
 # cell must pass no_rehad (else 'rehadr', "re-hadr.") AND no_rehad_strong (else
 # 'rehad_quasi', "quasi-re-hadr."). merge_rehad_labels folds quasi into 'rehadr'.
 REASON_CODE = {'solve': 0, 'witten': 1, 'rehadr': 2, 'rehad_quasi': 3,
@@ -84,19 +84,13 @@ class FilterConfig:
     # over grid cells with joblib, so the fast solver is called serially here
     # (compute_tov_sequence is single-threaded) to avoid numba-threads x joblib oversubscription.
     tov_backend: str = 'scipy'
-    # --- no-rehadronization filter (droplet test) -------------------------------
-    # The rehadronization filter is the DROPLET test: at each hadronic n_BH we solve
-    # the Q* droplet at the local hadronic conditions and require ΔP = P_Q* - P_H to
-    # stay positive past its crossing (no_rehad, 'rehadr') AND to be monotonically
-    # increasing in n_BH (no_rehad_strong, 'rehad_quasi'). Both are acceptance
-    # criteria. H_interp_rehad + n_B_H_grid_rehad are REQUIRED. See
-    # rehad_pressure_profile / rehad_flags.
-    H_interp_rehad: dict = None           # hadronic interpolators (e.g. H['betaeq'])
-    n_B_H_grid_rehad: np.ndarray = None   # n_BH sweep for the ΔP profile
-    rehad_flavor: str = 'saddlepoint'     # Q* composition mode for the droplet solve
-    rehad_charge: str = 'gcn'
-    Y_L_H_rehad: float = None             # trapped only; None for beta-eq
-    T_rehad: float = None                 # None -> use T_eos
+    # --- no-rehadronization filter (bulk ΔP at T=0) -----------------------------
+    # The rehadronization filter works on the bulk pressure difference
+    # ΔP(mu_B) = P_quark(mu_B) - P_H(mu_B) at T=0, over the mu_B overlap (uses the
+    # P_H_of_muB comparator above -- no extra solves). A cell must pass no_rehad
+    # (ΔP stays >0 past its crossing -> else 'rehadr') AND no_rehad_strong (ΔP
+    # monotonically increasing in mu_B -> else 'rehad_quasi'). Both are acceptance
+    # criteria. See _rehad_reason / rehad_flags.
     merge_rehad_labels: bool = False      # fold 'rehad_quasi' into 'rehadr' (one zone)
 
 
@@ -259,13 +253,13 @@ def ud_eps_per_nB(alpha, B4, cfg: FilterConfig):
 
 def passes_cfl_filters(alpha, B4, Delta0, cfg: FilterConfig):
     """(ok, M_max, reason) for the three CFL filters, ordered cheap->expensive:
-    (1) Witten e/n_B|_{P=0} < cfg.e_over_nB_max, (2) droplet no-rehadronization
-    (both conditions, see _rehad_reason), (3) TOV M_max in cfg.M_max_window.
-    M_max is finite once TOV runs."""
+    (1) Witten e/n_B|_{P=0} < cfg.e_over_nB_max, (2) bulk no-rehadronization on
+    ΔP(mu_B)=P_CFL-P_H at T=0 (both conditions, see _rehad_reason), (3) TOV M_max
+    in cfg.M_max_window. M_max is finite once TOV runs."""
     P_cfl, e_cfl, mu_cfl, ok = cfl_eos_at_params(alpha, B4, Delta0, cfg)
     if ok.sum() < 20:
         return False, np.nan, 'solve'
-    n_ok, P_ok, e_ok = cfg.n_B_grid[ok], P_cfl[ok], e_cfl[ok]
+    n_ok, P_ok, e_ok, mu_ok = cfg.n_B_grid[ok], P_cfl[ok], e_cfl[ok], mu_cfl[ok]
 
     cr = zero_crossing(n_ok, P_ok)
     if cr is None or P_ok[-1] <= 0:
@@ -276,7 +270,7 @@ def passes_cfl_filters(alpha, B4, Delta0, cfg: FilterConfig):
     if e_P0 / n_P0 >= cfg.e_over_nB_max:
         return False, np.nan, 'witten'
 
-    rehad = _rehad_reason(alpha, B4, Delta0, cfg, 'cfl')
+    rehad = _rehad_reason(mu_ok, P_ok, cfg)
     if rehad is not None:
         return False, np.nan, rehad
 
@@ -302,8 +296,8 @@ def passes_unpaired_filters(alpha, B4, cfg: FilterConfig):
     """(ok, M_max, reason) for UNPAIRED strange-quark matter — the filter built
     on the UNPAIRED alpha-Bag EoS (no Delta_0):
 
-      (1) droplet no-rehadronization (both conditions, see _rehad_reason), built
-          on the UNPAIRED Q* droplet;
+      (1) bulk no-rehadronization on ΔP(mu_B)=P_unp-P_H at T=0 (both conditions,
+          see _rehad_reason), built on the UNPAIRED quark EoS;
       (2) TOV M_max in cfg.M_max_window, structure integrated with the
           UNPAIRED quark EoS (not CFL).
 
@@ -313,10 +307,10 @@ def passes_unpaired_filters(alpha, B4, cfg: FilterConfig):
     P_q, e_q, mu_q, ok = unpaired_eos_at_params(alpha, B4, cfg)
     if ok.sum() < 20:
         return False, np.nan, 'solve'
-    n_ok, P_ok, e_ok = cfg.n_B_grid[ok], P_q[ok], e_q[ok]
+    n_ok, P_ok, e_ok, mu_ok = cfg.n_B_grid[ok], P_q[ok], e_q[ok], mu_q[ok]
 
-    # (1) droplet no-rehadronization (weak + strong).
-    rehad = _rehad_reason(alpha, B4, None, cfg, 'unpaired')
+    # (1) bulk no-rehadronization (weak + strong).
+    rehad = _rehad_reason(mu_ok, P_ok, cfg)
     if rehad is not None:
         return False, np.nan, rehad
 
@@ -419,25 +413,26 @@ def rehad_flags(n_B_H_grid, dP):
     return no_rehad, no_rehad_strong, n_BH_cross
 
 
-def _rehad_reason(alpha, B4, Delta0, cfg: FilterConfig, quark_phase):
-    """Droplet no-rehadronization filter reason for one cell.
+def _rehad_reason(mu_q, P_q, cfg: FilterConfig, n_mu=500):
+    """Bulk no-rehadronization filter reason for one cell, from the T=0 pressure
+    difference ΔP(mu_B) = P_quark(mu_B) - P_H(mu_B) on the mu_B overlap.
 
     None if the cell passes BOTH conditions, else the failing reason:
-      'rehadr'      -- no_rehad fails (ΔP dips back below P_H after crossing);
-      'rehad_quasi' -- no_rehad passes but ΔP is not monotone in n_BH.
-    With cfg.merge_rehad_labels both map to 'rehadr'. Solves the Q* droplet along
-    cfg.n_B_H_grid_rehad at the local hadronic conditions (rehad_pressure_profile)."""
-    if cfg.H_interp_rehad is None or cfg.n_B_H_grid_rehad is None:
-        raise ValueError("the re-hadronization filter needs H_interp_rehad and "
-                         "n_B_H_grid_rehad set on the FilterConfig")
-    params = get_alphabag_custom(alpha=alpha, B4=B4, m_s=cfg.m_s)
-    T = cfg.T_eos if cfg.T_rehad is None else cfg.T_rehad
-    _, dP = rehad_pressure_profile(
-        cfg.H_interp_rehad, params, cfg.n_B_H_grid_rehad,
-        Y_L_H=cfg.Y_L_H_rehad, T=T, flavor_mode=cfg.rehad_flavor,
-        electric_charge_mode=cfg.rehad_charge, quark_phase=quark_phase,
-        Delta0=Delta0)
-    no_re, strong, _ = rehad_flags(cfg.n_B_H_grid_rehad, dP)
+      'rehadr'      -- no_rehad fails: after the phases first cross, the quark
+                       pressure dips back below P_H (matter could re-hadronize);
+      'rehad_quasi' -- no_rehad passes but ΔP is not monotonically increasing in
+                       mu_B (quark phase not becoming steadily more favoured).
+    With cfg.merge_rehad_labels both map to 'rehadr'. mu_q/P_q are the CFL (or
+    unpaired) EoS points already solved over cfg.n_B_grid -- no extra solves."""
+    mu_lo = max(mu_q.min(), cfg.mu_B_H_sorted.min())
+    mu_hi = min(mu_q.max(), cfg.mu_B_H_sorted.max())
+    if mu_hi <= mu_lo:
+        return 'rehadr'
+    mu = np.linspace(mu_lo, mu_hi, n_mu)
+    Pc = interp1d(mu_q, P_q, kind='linear', bounds_error=False,
+                  fill_value=np.nan)(mu)
+    dP = Pc - cfg.P_H_of_muB(mu)               # ΔP(mu_B) on the overlap
+    no_re, strong, _ = rehad_flags(mu, dP)
     if not no_re:
         return 'rehadr'
     if not strong:
@@ -565,6 +560,23 @@ def central_state(MT0, star: StarMatch):
     return nBHc, T_c, H_pt
 
 
+def star_shell_states(MT0, star: StarMatch, n_shells, nB_min=0.25):
+    """Hadronic states [(H_pt, T)] at n_shells densities nB_min..nB_centre.
+
+    The nucleation site is NOT always the centre: near the SQM-stability corner
+    the driving force |Delta_f| peaks at ~2 n_sat and weakens toward the centre,
+    so lower-density shells nucleate at higher sigma. sigma_crit must therefore
+    demand tau > tau_target at EVERY shell up to the centre, not just at r=0.
+    T on each shell follows the (Y_L, S) isentrope. Centre is always included
+    (last element)."""
+    nBHc, T_c, H_pt = central_state(MT0, star)
+    shells = []
+    for nB in np.linspace(nB_min, nBHc, int(n_shells)):
+        T = float(star.H_iso_trapped['T'](nB, star.YLH, star.S))
+        shells.append((hadronic_point(star.H_trapped, nB, star.YLH, T), T))
+    return shells
+
+
 def critical_droplet_pt(sigma, H_pt, T_c, flavor, charge, phase, cache,
                         params, Delta0, nuc: NucConfig):
     """Critical droplet at one hadronic point: (R_c [fm], W_c [MeV], Qs).
@@ -610,8 +622,18 @@ def tau_pt(sigma, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc: 
     return float(nucleation_time(Gamma, nuc.V)) if Gamma > 0 else np.inf
 
 
-def sigma_target_pt(H_pt, T_c, flavor, charge, phase, params, Delta0, nuc: NucConfig):
-    """sigma where tau(sigma) = nuc.tau_target at the star centre.
+def sigma_target_pt(H_pt, T_c, flavor, charge, phase, params, Delta0,
+                    nuc: NucConfig, shells=None):
+    """sigma where tau(sigma) = nuc.tau_target -- at the star centre, or, when
+    ``shells`` is given, star-wide.
+
+    ``shells`` is a list of (H_pt, T) hadronic states along the star profile
+    (see ``star_shell_states``). The scanned quantity is then
+    tau_star(sigma) = min over shells of tau(sigma, shell), so the returned
+    sigma_crit is the largest sigma at which ANY shell still nucleates -- i.e.
+    the minimum sigma that guarantees tau > tau_target EVERYWHERE with
+    n_B <= n_B_centre, per the star-wide no-nucleation definition. shells=None
+    keeps the original centre-only behaviour.
 
     Robust to solver drop-outs. tau(sigma) can be non-monotonic and can be NaN
     over whole sigma sub-ranges where no critical droplet exists (e.g. the unpCFL
@@ -631,11 +653,31 @@ def sigma_target_pt(H_pt, T_c, flavor, charge, phase, params, Delta0, nuc: NucCo
       NaN    : no converged nucleating point (never reaches tau_target from below,
                or no critical droplet anywhere in [sig_lo, sig_hi]).
     """
-    cache = {}
     lo = np.log10(nuc.tau_target)
 
+    if shells is None:
+        shells = [(H_pt, T_c)]
+    caches = [{} for _ in shells]          # per-shell composition memoization
+    last_hit = [len(shells) - 1]           # warm start: try last nucleating shell first
+
     def tau(s):
-        return tau_pt(s, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc)
+        # tau_star = min over shells; early exit once one shell nucleates (the
+        # sign vs tau_target -- all the crossing logic needs -- is then fixed,
+        # and near the crossing only the controlling shell is marginal anyway).
+        best = np.nan
+        order = [last_hit[0]] + [k for k in range(len(shells)) if k != last_hit[0]]
+        for k in order:
+            hp, tc = shells[k]
+            t = tau_pt(s, hp, tc, flavor, charge, phase, caches[k],
+                       params, Delta0, nuc)
+            if np.isnan(t):
+                continue                   # unknown shell: skip (NaN if all skip)
+            if np.isnan(best) or t < best:
+                best = t
+            if t <= nuc.tau_target:
+                last_hit[0] = k
+                return t
+        return best
 
     sig = np.linspace(nuc.sig_lo, nuc.sig_hi, int(nuc.n_sigma_scan))
     t = np.array([tau(s) for s in sig])
@@ -687,15 +729,10 @@ _filter_cache = {}
 
 
 def _rehad_key(cfg: FilterConfig):
-    # Scalar signature of the no-rehadronization (droplet) filter for cache
-    # invalidation. ponytail: keys on grid (len,min,max) not identity of
-    # H_interp/n_B_H_grid; pass reuse=False if you swap the H interpolators
-    # without touching a scalar.
-    g = (np.asarray(cfg.n_B_H_grid_rehad, float)
-         if cfg.n_B_H_grid_rehad is not None else np.array([]))
-    return (bool(cfg.merge_rehad_labels), cfg.rehad_flavor, cfg.rehad_charge,
-            cfg.Y_L_H_rehad, cfg.T_rehad,
-            (len(g), float(g.min()), float(g.max())) if g.size else ())
+    # Scalar signature of the no-rehadronization filter for cache invalidation.
+    # ponytail: the ΔP(mu_B) profile itself is fixed by (alpha,B4,Delta0)+P_H, all
+    # already in the key; only the quasi-vs-rehadr labelling toggle is extra.
+    return (bool(cfg.merge_rehad_labels),)
 
 
 def _grid_key(alpha_slices, B4_grid, Delta0_grid, cfg: FilterConfig):
@@ -835,19 +872,27 @@ def scan_unpaired_filters(alpha_slices, B4_grid, cfg: FilterConfig,
 
 def compute_sigma_crit(cfl_ok, MT0, flavor, charge, phase, alpha_slices, B4_grid,
                        Delta0_grid, star: StarMatch, nuc: NucConfig, m_s=100.0,
-                       n_jobs=-1, verbose=True):
+                       n_jobs=-1, verbose=True, n_shells=1, nB_shell_min=0.25):
     """sigma_crit stack at one MT0 / method, only on CFL-pass cells. H_pt (plain
-    floats) is computed once and shared -> joblib-parallel over CFL-pass cells."""
+    floats) is computed once and shared -> joblib-parallel over CFL-pass cells.
+
+    n_shells=1 (default) evaluates at the star CENTRE only. n_shells>1 makes
+    sigma_crit STAR-WIDE: tau > tau_target is demanded at n_shells densities
+    from nB_shell_min up to the centre (see star_shell_states) -- the centre is
+    not always the easiest nucleation site."""
     alpha_slices = np.atleast_1d(np.asarray(alpha_slices, float))
     NA, ND, NB = cfl_ok.shape
     nBHc, T_c, H_pt = central_state(MT0, star)
+    shells = (star_shell_states(MT0, star, n_shells, nB_shell_min)
+              if n_shells > 1 else None)
     sig = np.full((NA, ND, NB), np.nan)
     cells = [(ia, i, jx) for ia in range(NA) for i in range(ND) for jx in range(NB)
              if cfl_ok[ia, i, jx]]
     use_par = (n_jobs != 1) and _HAVE_JOBLIB
     if verbose:
         print(f"  sigma_crit MT0={MT0:.2f} {flavor}/{charge}/{phase}: {len(cells)} "
-              f"CFL-pass cells (nBHc={nBHc:.4f}, T_c={T_c:.2f} MeV), "
+              f"CFL-pass cells (nBHc={nBHc:.4f}, T_c={T_c:.2f} MeV, "
+              f"{'star-wide %d shells' % n_shells if shells else 'centre only'}), "
               f"{'parallel' if use_par else 'serial'}", flush=True)
     if not cells:
         return sig
@@ -858,10 +903,12 @@ def compute_sigma_crit(cfl_ok, MT0, flavor, charge, phase, alpha_slices, B4_grid
     if use_par:
         from joblib import Parallel, delayed
         vals = Parallel(n_jobs=n_jobs, verbose=(10 if verbose else 0))(
-            delayed(sigma_target_pt)(H_pt, T_c, flavor, charge, phase, pp, d0, nuc)
+            delayed(sigma_target_pt)(H_pt, T_c, flavor, charge, phase, pp, d0,
+                                     nuc, shells=shells)
             for pp, d0 in zip(pars, D0s))
     else:
-        vals = [sigma_target_pt(H_pt, T_c, flavor, charge, phase, pp, d0, nuc)
+        vals = [sigma_target_pt(H_pt, T_c, flavor, charge, phase, pp, d0, nuc,
+                                shells=shells)
                 for pp, d0 in zip(pars, D0s)]
     for (ia, i, jx), v in zip(cells, vals):
         sig[ia, i, jx] = v
@@ -879,10 +926,12 @@ def compute_sigma_crit(cfl_ok, MT0, flavor, charge, phase, alpha_slices, B4_grid
 def run_sigma_crit_scan(MT0_grid_thr, flavor, charge, phase, alpha_slices,
                         B4_grid, Delta0_grid, cfg: FilterConfig, nuc: NucConfig,
                         star: StarMatch, n_jobs=-1, reuse_filter=True,
-                        save_path_fmt=None, xsd_tag='', extra_save=None):
+                        save_path_fmt=None, xsd_tag='', extra_save=None,
+                        n_shells=1, nB_shell_min=0.25):
     """CFL filters (cached) + sigma_crit per MT0. Returns
     {MT0: dict(sig_crit, cfl_ok, M_max, reason)}. If save_path_fmt is given it is
-    formatted with (xsd=xsd_tag, MT0=MT0, flavor, charge, phase) and an .npz saved."""
+    formatted with (xsd=xsd_tag, MT0=MT0, flavor, charge, phase) and an .npz saved.
+    n_shells>1 -> STAR-WIDE sigma_crit (see compute_sigma_crit)."""
     alpha_slices = np.atleast_1d(np.asarray(alpha_slices, float))
     cfl, mm, rs = scan_cfl_filters(alpha_slices, B4_grid, Delta0_grid, cfg,
                                    reuse=reuse_filter, n_jobs=n_jobs)
@@ -891,7 +940,8 @@ def run_sigma_crit_scan(MT0_grid_thr, flavor, charge, phase, alpha_slices,
         MT0 = float(MT0)
         sig = compute_sigma_crit(cfl, MT0, flavor, charge, phase, alpha_slices,
                                  B4_grid, Delta0_grid, star, nuc, m_s=cfg.m_s,
-                                 n_jobs=n_jobs)
+                                 n_jobs=n_jobs, n_shells=n_shells,
+                                 nB_shell_min=nB_shell_min)
         if save_path_fmt:
             npz = save_path_fmt.format(xsd=xsd_tag, MT0=MT0, flavor=flavor,
                                        charge=charge, phase=phase)

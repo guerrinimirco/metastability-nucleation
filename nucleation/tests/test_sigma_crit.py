@@ -87,3 +87,34 @@ def test_rehad_pressure_profile_smoke(H_interp, params):
         flavor_mode='saddlepoint', electric_charge_mode='gcn')
     assert n.shape == dP.shape == n_grid.shape
     assert np.isfinite(dP).any()   # at least some Q* solves converge
+
+
+def test_sigma_target_pt_shells(monkeypatch):
+    """Star-wide sigma_crit = the largest crossing over shells (min-tau logic)."""
+    import nucleation.analysis.sigma_crit as sc
+    nuc = NucConfig(sig_lo=1.0, sig_hi=300.0, n_sigma_scan=40, tau_target=1e-3)
+    lo = np.log10(nuc.tau_target)
+
+    # two shells: 'A' crosses tau_target at sigma=100, 'B' (off-centre) at 150.
+    def tau_two(s, hp, *a, **k):
+        cross = {'A': 100.0, 'B': 150.0}[hp]
+        return 10.0 ** (lo + (s - cross) / 30.0)
+    monkeypatch.setattr(sc, 'tau_pt', tau_two)
+    shells = [('A', 0.0), ('B', 0.0)]
+    sig = sigma_target_pt(None, None, 'f', 'c', 'p', None, None, nuc,
+                          shells=shells)
+    assert sig == pytest.approx(150.0, abs=2.0)   # controlled by shell B, not A
+
+    # centre-only (shells=None) must still return shell-A behaviour via H_pt
+    sig0 = sigma_target_pt('A', 0.0, 'f', 'c', 'p', None, None, nuc)
+    assert sig0 == pytest.approx(100.0, abs=2.0)
+
+    # a NaN shell is skipped, not fatal: 'C' never converges
+    def tau_nanC(s, hp, *a, **k):
+        if hp == 'C':
+            return np.nan
+        return tau_two(s, hp)
+    monkeypatch.setattr(sc, 'tau_pt', tau_nanC)
+    sig2 = sigma_target_pt(None, None, 'f', 'c', 'p', None, None, nuc,
+                           shells=[('C', 0.0), ('A', 0.0), ('B', 0.0)])
+    assert sig2 == pytest.approx(150.0, abs=2.0)

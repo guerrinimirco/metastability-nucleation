@@ -989,23 +989,17 @@ _sig_methods = [
 # Config objects consumed by the engine (P_H arrays come from Part III.1).
 # tov_backend=TOV_BACKEND routes the CFL M_max filter and the M-R replay through
 # the fast solver too — that (not Part II) is where most TOV time is spent.
-# No-rehadronization filter = the DROPLET test (replaces the old bulk P_CFL>P_H
-# crossing): at each hadronic n_BH solve the Q* droplet and require ΔP=P_Q*-P_H to
-# stay positive past its crossing (no_rehad -> 're-hadr.') AND be monotone in n_BH
-# (no_rehad_strong -> 'quasi-re-hadr.'). Both are acceptance criteria. CFL scan is
-# cold beta-eq -> H['betaeq']; sweep ~2-8 n_sat (tune n_B_H_grid_rehad). T_rehad is
-# the betaeq table's T-grid FLOOR (not 0.0, which is off-grid -> NaN H) — same cold
-# convention as P_H_of_muB above. merge_rehad_labels=True folds both failures into
-# one 're-hadr.' zone.
-n_B_H_grid_rehad = np.linspace(2.0, 8.0, 40) * n_sat            # fm^-3
-T_H_floor = float(H_table['betaeq'].grids['T'][0])             # cold hadronic T [MeV]
+# No-rehadronization filter = the bulk ΔP(mu_B)=P_CFL-P_H test at T=0 (CFL vs cold
+# neutrinoless hadronic), using the P_H_of_muB comparator built above. A set must
+# pass no_rehad (ΔP stays >0 past its crossing -> else 're-hadr.') AND
+# no_rehad_strong (ΔP monotonically increasing in mu_B -> else 'quasi-re-hadr.').
+# Both are acceptance criteria. merge_rehad_labels=True folds both into one
+# 're-hadr.' zone.
 _filt_cfg = nuc_an.FilterConfig(
     P_H_of_muB=P_H_of_muB, mu_B_H_sorted=mu_B_H_sorted, P_H_sorted=P_H_sorted,
     m_s=m_s_fixed, n_B_grid=n_B_grid_cfl, e_c_vec_tov=e_c_vec_tov,
     M_max_window=M_max_window, e_over_nB_max=e_over_nB_max,
-    tov_backend=TOV_BACKEND,
-    H_interp_rehad=H['betaeq'], n_B_H_grid_rehad=n_B_H_grid_rehad,
-    T_rehad=T_H_floor, merge_rehad_labels=False)
+    tov_backend=TOV_BACKEND, merge_rehad_labels=False)
 _nuc_cfg = nuc_an.NucConfig(sig_lo=sig_lo, sig_hi=sig_hi,
                             tau_target=tau_target, V=V_nuc)
 
@@ -1069,12 +1063,21 @@ def _regime_grid(sig_crit, alpha_slices, B4_grid, Delta0_grid, MT0, slices=None,
         reg[ia] = np.array(res).reshape(ND, NB)
     return reg
 
+# STAR-WIDE σ_crit: τ > τ_target is demanded at N_SHELLS densities from
+# NB_SHELL_MIN up to the star centre, not just at r=0 — the centre is NOT always
+# the easiest nucleation site (|Δf| peaks near ~2 n_sat close to the SQM-stability
+# corner, so outer shells can nucleate at σ where the centre is already quiet).
+# N_SHELLS=1 recovers the old centre-only definition.
+N_SHELLS     = 12
+NB_SHELL_MIN = 0.25          # fm^-3 (~1.6 n_sat) — lowest shell checked
+
 def _run_scan(MT0s, fl, ch, ph, do_plot=True):
     """CFL filter (cached) + σ_crit per MT0; save each grid to .npz; optional plot."""
     res = nuc_an.run_sigma_crit_scan(
         MT0s, fl, ch, ph, alpha_slices, B4_grid_scan, Delta0_grid_scan,
         _filt_cfg, _nuc_cfg, _star, n_jobs=scan_n_jobs, reuse_filter=True,
         xsd_tag=xsd_tag, extra_save=dict(YLH=YLH, S=S),
+        n_shells=N_SHELLS, nB_shell_min=NB_SHELL_MIN,
         save_path_fmt=('../output/mc_cfl/sigma_crit_grid_{xsd}_MT0{MT0:.2f}_'
                        '{flavor}-{charge}-{phase}.npz'))
     if do_plot:
