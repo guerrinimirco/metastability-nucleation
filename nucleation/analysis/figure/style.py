@@ -60,7 +60,7 @@ def set_paper_style():
     })
 
 
-def paper_grid(layout='2x2', mode='single'):
+def paper_grid(layout='2x2', mode='single', placeholder=True):
     """Build a square-panelled PRD figure with the publication style applied.
 
     Physics: each panel is forced to an exact 1:1 box aspect so, e.g., an M-R
@@ -76,9 +76,12 @@ def paper_grid(layout='2x2', mode='single'):
                  'double'   -> W = PRD_FULL_W     (7.0", two columns)
                2×2 is (W, W); 1×2 is (W, W/2) so its panels match a 2×2 top row.
 
-    Panels do NOT share axes: every one carries its own x/y label and title
-    (placeholders below - replace them at the call site). Returns (fig, axes)
-    with axes a 2-D ndarray; unpack as ((axA, axB), (axC, axD)) or (axA, axB).
+    Panels do NOT share axes: every one carries its own x/y axis. With
+    placeholder=True (default) each panel gets dummy x/y labels and a title so
+    the bare layout reads as a template; pass placeholder=False for a real
+    figure that sets its own labels (and tags panels with panel_label instead of
+    a title). Returns (fig, axes) with axes a 2-D ndarray; unpack as
+    ((axA, axB), (axC, axD)) or (axA, axB).
     """
     widths = {'single': PRD_COL_W, 'centered': PRD_CENTERED_W, 'double': PRD_FULL_W}
     if mode not in widths:
@@ -97,10 +100,12 @@ def paper_grid(layout='2x2', mode='single'):
                              squeeze=False)
     for ax in axes.flat:
         ax.set_box_aspect(1)        # exact square box, independent of label room
-        # Placeholder labels/title - replace per panel at the call site.
-        ax.set_xlabel(r'$x$')
-        ax.set_ylabel(r'$y$')
-        ax.set_title('panel')
+        if placeholder:
+            # Dummy labels/title so the empty template looks complete - real
+            # figures pass placeholder=False and set their own.
+            ax.set_xlabel(r'$x$')
+            ax.set_ylabel(r'$y$')
+            ax.set_title('panel')
     return fig, axes
 
 

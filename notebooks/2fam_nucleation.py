@@ -113,7 +113,7 @@ import nucleation.analysis as nuc_an               # sigma_crit scan engine
 
 # ─── Figure styling + observational-constraint overlays (shared, in-package) ─
 from nucleation.analysis.figure import (
-    set_paper_style, panel_label, STANDARD_COLORS, PRD_COL_W, PRD_FULL_W, PRD_2X2_H,
+    set_paper_style, paper_grid, panel_label, STANDARD_COLORS,
     add_observational_constraints,
 )
 
@@ -1376,8 +1376,8 @@ for F1_SET in quark_param_sets[::-1]:
         return int(np.argmin(np.abs(_Tg - T)))
 
 
-    fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(PRD_FULL_W, PRD_2X2_H),
-                                                 constrained_layout=True)
+    # PRD size: mode='centered' (4.75" square). Change to 'single'/'double' to resize.
+    fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='centered', placeholder=False)
 
     # ---- (a) W(R): density = colour, phase = line style ----
     _cA = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1_DENS)))
@@ -1511,8 +1511,8 @@ def _iT(T):
 
 _cS = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1S_SIGMAS)))
 
-fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(PRD_FULL_W, PRD_2X2_H),
-                                             constrained_layout=True)
+# PRD size: mode='centered' (4.75" square). Change to 'single'/'double' to resize.
+fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='centered', placeholder=False)
 
 # ---- (a) W(R) at fixed (T, n_B): colour = σ, line style = phase ----
 _Rg = np.linspace(0.01, 14.0, 400)
@@ -1731,8 +1731,8 @@ def _grid(ax):
 
 
 
-fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(PRD_FULL_W, PRD_2X2_H),
-                                             constrained_layout=True)
+# PRD size: mode='centered' (4.75" square). Change to 'single'/'double' to resize.
+fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='centered', placeholder=False)
 
 # (a) M-R.  Fix the view FIRST so the constraint fills (some reach R~21) can't
 #     auto-expand the axis and fling the labels into the margin.
@@ -1906,10 +1906,11 @@ for FN_SET in quark_param_sets:
     _panels = [dict(**PNS_T0,   lab='(a)'),         # left  = t_0
                dict(**PNS_TMAX, lab='(b)')]         # right = t_Tmax
 
-    fig, axes = plt.subplots(1, 2, figsize=(PRD_FULL_W, PRD_2X2_H),
-                             constrained_layout=True)   # half the 2×2 height → panels match a 2×2 top row
+    # PRD size: mode='centered' (4.75" wide, half height → panels match a 2×2 top row).
+    # Change to 'single'/'double' to resize.
+    fig, axes = paper_grid('1x2', mode='centered', placeholder=False)
     # NOTE: no sharey — both panels carry their own T_nuc axis (same ylim set below)
-    for ax, pan in zip(axes, _panels):
+    for ax, pan in zip(axes[0], _panels):   # axes is 2-D (1×2) → row 0 is the panels
         YL, S, col = pan['YLH'], pan['S'], pan['color']
         YL_used = None
         for sg in F6_SIGMAS:
@@ -2204,8 +2205,9 @@ _D0      = FN2_SET['Delta0']
 _T_CFL   = float(T_critical(_D0))                     # CFL undefined above this
 _sig_ref = int(FN2_SIGMAS[len(FN2_SIGMAS) // 2])      # σ fed to the bulk-Δf call (Δf σ-independent)
 
-fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(PRD_FULL_W, PRD_2X2_H),
-                                             sharex=True, constrained_layout=True)
+# PRD size: mode='centered' (4.75" square). Change to 'single'/'double' to resize.
+# No sharex (new mode) — every panel carries its own x-axis + label.
+fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='centered', placeholder=False)
 _bcd_axes = [axB, axC, axD]
 
 # nearest table Y_L to FN2_YL (the getters read the interpolators at _YL)
@@ -2361,12 +2363,12 @@ def _B_unp_absstable(alpha, lo, hi):
         return np.nan
     return brentq(f, lo, hi, xtol=0.05)
 
-fig, axes = plt.subplots(1, len(F8_SHOW), figsize=(5.25 * len(F8_SHOW), 4.8),
-                         squeeze=False, constrained_layout=True)
+# PRD size: mode='centered' (4.75" wide, 1×2). Change to 'single'/'double' to resize.
+# paper_grid('1x2') is 2 columns → assumes len(F8_SHOW) == 2 (F8_SHOW = [0, 1]).
+fig, axes = paper_grid('1x2', mode='centered', placeholder=False)   # panels already square
 pcm = None
 for _c, _ia in enumerate(F8_SHOW):
     ax = axes[0, _c]
-    ax.set_box_aspect(1)                        # square panels
     _sa, _ra, _rg, _ma, _ok = _SIG8[_ia], _RS8[_ia], _reg8[_ia], _MM8[_ia], _OK8[_ia]
     # (1) sigma_crit heatmap (excluded cells are NaN -> left white)
     if F8_HEATMAP:
