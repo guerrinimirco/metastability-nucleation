@@ -58,11 +58,12 @@ import sys, os
 # eos: no local source in this repo → install from GitHub.
 # !{sys.executable} -m pip install --no-deps --force-reinstall git+https://github.com/guerrinimirco/eos.git --quiet
 print("eos package loaded successfully!")
-# nucleation: developed IN THIS REPO → editable install from the local source so
-# notebook edits under ../nucleation are live (kernel restart to reload modules).
-# Do NOT force-reinstall it from git here: that overwrites the editable install
-# with a stale copy in site-packages and repo edits silently stop taking effect.
-# !{sys.executable} -m pip install --no-deps -e .. --quiet
+# nucleation: developed IN THIS REPO. Put the repo root FIRST on sys.path so
+# `import nucleation` always resolves to the local source (edits live; restart
+# the kernel to reload changed modules). This beats any copy in site-packages,
+# so a stray `pip install ...metastability-nucleation.git` can't shadow the repo.
+# Do NOT re-enable such a git install here — it silently breaks local editing.
+sys.path.insert(0, os.path.abspath('..'))
 print("nucleation package loaded successfully!")
 
 
