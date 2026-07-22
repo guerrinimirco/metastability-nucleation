@@ -54,16 +54,16 @@
 # %%
 import sys, os
 
-# ─── Install the packages from GitHub (latest commit) ─────────────
-# Comment these out and uncomment the local-path block when developing
+# ─── Install the packages ─────────────────────────────────────────
+# eos: no local source in this repo → install from GitHub.
 # !{sys.executable} -m pip install --no-deps --force-reinstall git+https://github.com/guerrinimirco/eos.git --quiet
 print("eos package loaded successfully!")
-# !{sys.executable} -m pip install --no-deps --force-reinstall git+https://github.com/guerrinimirco/metastability-nucleation.git --quiet
+# nucleation: developed IN THIS REPO → editable install from the local source so
+# notebook edits under ../nucleation are live (kernel restart to reload modules).
+# Do NOT force-reinstall it from git here: that overwrites the editable install
+# with a stale copy in site-packages and repo edits silently stop taking effect.
+# !{sys.executable} -m pip install --no-deps -e .. --quiet
 print("nucleation package loaded successfully!")
-
-# Local-dev alternative:
-# # !{sys.executable} -m pip install -e ../../eos --quiet
-# # !{sys.executable} -m pip install -e ../../nucleation --quiet
 
 
 # ─── Standard library ────────────────────────────────────────────────────────
@@ -1415,7 +1415,7 @@ for F1_SET in quark_param_sets[::-1]:
                [_PHASE_LBL[p] for p in _PHASE_LS], loc='upper right')
 
     # ---- (b,c,d) vs n_B^H/n_0: temperature = colour, phase = line style ----
-    _cT = OKAB_CAT[:len(F1_TEMPS)]                   # temperature = category (Okabe-Ito)
+    _cT = plt.cm.plasma(np.linspace(0.05, 0.85, len(F1_TEMPS)))
 
 
     def _f1_vs_nBH(ax, getter, ylabel, logy=False):
