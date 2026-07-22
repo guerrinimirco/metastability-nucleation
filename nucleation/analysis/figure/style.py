@@ -5,6 +5,7 @@ project colour palette, so every notebook figure looks the same and a style
 tweak edits a single file.
 """
 import matplotlib as mpl
+import matplotlib.pyplot as plt
 
 # Project palette (muted tones that survive both screen and print).
 STANDARD_COLORS = {
@@ -32,6 +33,9 @@ PRD_FULL_W = 7.0
 # PRD text height (~9 in) so two figures fit per page. Panels go landscape at
 # this height; fonts stay 10 pt (PRD body). 1×2 figures use half of this.
 PRD_2X2_H  = 4.5
+# Mid-size square figure: wider than one column but kept under half the PRD text
+# height (~9 in) so two stack on a page. Used by paper_grid(mode='centered').
+PRD_CENTERED_W = 4.75
 
 
 def set_paper_style():
@@ -56,6 +60,50 @@ def set_paper_style():
     })
 
 
+def paper_grid(layout='2x2', mode='single'):
+    """Build a square-panelled PRD figure with the publication style applied.
+
+    Physics: each panel is forced to an exact 1:1 box aspect so, e.g., an M-R
+    plane or a phase diagram isn't visually stretched. The figure is built at the
+    true page width it will occupy (no LaTeX rescaling), so the 10 pt fonts from
+    set_paper_style() land as PRD body text.
+
+    Mechanics:
+      layout : '2x2' (four panels) or '1x2' (a two-panel row = the 2×2 top row).
+      mode   : sets the figure width W -
+                 'single'   -> W = PRD_COL_W     (3.375", one column)
+                 'centered' -> W = PRD_CENTERED_W (4.75", mid-size)
+                 'double'   -> W = PRD_FULL_W     (7.0", two columns)
+               2×2 is (W, W); 1×2 is (W, W/2) so its panels match a 2×2 top row.
+
+    Panels do NOT share axes: every one carries its own x/y label and title
+    (placeholders below - replace them at the call site). Returns (fig, axes)
+    with axes a 2-D ndarray; unpack as ((axA, axB), (axC, axD)) or (axA, axB).
+    """
+    widths = {'single': PRD_COL_W, 'centered': PRD_CENTERED_W, 'double': PRD_FULL_W}
+    if mode not in widths:
+        raise ValueError(f"mode must be one of {sorted(widths)}, got {mode!r}")
+    if layout not in ('2x2', '1x2'):
+        raise ValueError(f"layout must be '2x2' or '1x2', got {layout!r}")
+
+    set_paper_style()
+    w = widths[mode]
+    nrows = 2 if layout == '2x2' else 1
+    figsize = (w, w) if layout == '2x2' else (w, w / 2)   # square panels either way
+
+    # squeeze=False -> axes always 2-D, so callers unpack uniformly.
+    # sharex/sharey default False: independent axes per the request.
+    fig, axes = plt.subplots(nrows, 2, figsize=figsize, layout='constrained',
+                             squeeze=False)
+    for ax in axes.flat:
+        ax.set_box_aspect(1)        # exact square box, independent of label room
+        # Placeholder labels/title - replace per panel at the call site.
+        ax.set_xlabel(r'$x$')
+        ax.set_ylabel(r'$y$')
+        ax.set_title('panel')
+    return fig, axes
+
+
 def panel_label(ax, lab, corner='upper left'):
     """Put an (a)/(b)/... tag in a panel corner. `corner` is a vertical word
     ('upper'/'lower') optionally followed by a horizontal one ('left'/'right');
@@ -66,3 +114,18 @@ def panel_label(ax, lab, corner='upper left'):
     x, ha = (0.955, 'right') if right else (0.045, 'left')
     ax.text(x, y, lab, transform=ax.transAxes,
             fontweight='bold', va=va, ha=ha)
+
+
+if __name__ == '__main__':
+    # ponytail: smallest check that the sizing/squareness contract holds.
+    mpl.use('Agg')
+    _W = {'single': 3.375, 'centered': 4.75, 'double': 7.0}
+    for _lay in ('2x2', '1x2'):
+        for _m, _w in _W.items():
+            _fig, _ax = paper_grid(_lay, _m)
+            _fw, _fh = _fig.get_size_inches()
+            assert abs(_fw - _w) < 1e-9
+            assert abs(_fh - (_w if _lay == '2x2' else _w / 2)) < 1e-9
+            assert all(abs(a.get_box_aspect() - 1) < 1e-9 for a in _ax.flat)
+            plt.close(_fig)
+    print('paper_grid self-check ok')

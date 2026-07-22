@@ -1906,8 +1906,9 @@ for FN_SET in quark_param_sets:
     _panels = [dict(**PNS_T0,   lab='(a)'),         # left  = t_0
                dict(**PNS_TMAX, lab='(b)')]         # right = t_Tmax
 
-    fig, axes = plt.subplots(1, 2, figsize=(PRD_FULL_W, PRD_2X2_H / 2), sharey=True,
+    fig, axes = plt.subplots(1, 2, figsize=(PRD_FULL_W, PRD_2X2_H),
                              constrained_layout=True)   # half the 2×2 height → panels match a 2×2 top row
+    # NOTE: no sharey — both panels carry their own T_nuc axis (same ylim set below)
     for ax, pan in zip(axes, _panels):
         YL, S, col = pan['YLH'], pan['S'], pan['color']
         YL_used = None
@@ -1930,7 +1931,6 @@ for FN_SET in quark_param_sets:
                             lw=_PHASE_LW[ph], alpha=_PHASE_ALPHA[ph])
 
         ax.set_xlim(0.5, 12); ax.set_ylim(1, 80)      # T [MeV], n_B^H/n_sat
-        ax.tick_params(labelleft=True)                # y ticks on both panels
 
         # isentrope T(n_B^H) at (Y_L, S), solid in the snapshot colour + PNS markers.
         # Drawn from 0.5 n_sat up to the PNS M_max central density (branch tip).
@@ -1944,7 +1944,6 @@ for FN_SET in quark_param_sets:
 
         ax.set_xlabel(r'$n_B^H / n_{\rm sat}$')
         ax.set_ylabel(r'$T_{\rm nuc}$ [MeV]')         # on BOTH panels (incl. right)
-        ax.tick_params(labelleft=True)                # y tick numbers on right too (sharey hides them)
         ax.set_title(rf"{pan['lbl']}:  $Y_L^H={YL_iso:.2f}$,  $S_H={S:g}$")
         ax.set_box_aspect(1)                          # square panels
         panel_label(ax, pan['lab'])
@@ -2423,59 +2422,6 @@ if F8_HEATMAP and pcm is not None:
     fig.colorbar(pcm, ax=axes.ravel().tolist(), label=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]',
                  shrink=0.9)
 fig.savefig(f'../output/figures/sigcrit_map_isolines_{xsd_tag}.pdf', bbox_inches='tight')
-plt.show()
-
-
-# %% [markdown]
-# ### Paper Figure 8 (diff) — $\sigma_{\rm crit}^{\rm unpCFL}-\sigma_{\rm crit}^{\rm CFL}$
-#
-# Where the two-layer unpCFL droplet and the single-phase CFL droplet give
-# DIFFERENT critical surface tensions, over $(B^{1/4},\Delta_0)$ at $\tau$=1 ms,
-# $M_{T0}$=1.4 $M_\odot$. Diverging map centred at 0: white = identical (they
-# coincide across the bulk), blue = unpCFL needs a **lower** $\sigma$ to nucleate
-# (harder — the forced-unpaired core raises the barrier near the crossover). Grey
-# cells: unpCFL has no thermal nucleation there while CFL does. Excluded-region
-# outlines as in Fig 8. Loads the saved unpCFL + CFL grids (no recompute).
-
-# %%
-# ============================================================================
-#  Paper Fig 8 (diff): sigma_crit(unpCFL) - sigma_crit(CFL). Reuses Fig 8's arrays
-#  + _draw_reject / _HSPEC (run Fig 8 first); loads the CFL grid for the subtraction.
-# ============================================================================
-from matplotlib.colors import TwoSlopeNorm
-from matplotlib.patches import Patch
-set_paper_style()
-_Cg = np.load(f'../output/mc_cfl/sigma_crit_grid_{xsd_tag}_MT0{MT0_grid_thr[0]:.2f}_'
-              f'saddlepoint-coulomb_minimize-cfl.npz', allow_pickle=False)
-_SCcfl = _Cg['sig_crit']
-# diff only where BOTH phases nucleate (finite); NaN elsewhere.
-_DIFF = {_ia: np.where(np.isfinite(_SIG8[_ia]) & np.isfinite(_SCcfl[_ia]),
-                       _SIG8[_ia] - _SCcfl[_ia], np.nan) for _ia in F8_SHOW}
-_dvm = float(np.nanmax([np.nanmax(np.abs(_DIFF[_ia])) for _ia in F8_SHOW]))
-_dnorm = TwoSlopeNorm(vcenter=0.0, vmin=-_dvm, vmax=_dvm)   # diverging, 0 = neutral
-fig, axes = plt.subplots(1, len(F8_SHOW), figsize=(5.25 * len(F8_SHOW), 4.8),
-                         squeeze=False, constrained_layout=True)
-_pcm = None
-for _c, _ia in enumerate(F8_SHOW):
-    ax = axes[0, _c]; ax.set_box_aspect(1)
-    _ra = _RS8[_ia]
-    _only_cfl = np.isfinite(_SCcfl[_ia]) & ~np.isfinite(_SIG8[_ia])   # CFL nucleates, unpCFL not
-    if _only_cfl.any():
-        ax.contourf(_B48, _D08, _only_cfl.astype(float), levels=[0.5, 1.5],
-                    colors=['0.55'], zorder=2)
-    _pcm = ax.pcolormesh(_B48, _D08, np.ma.masked_invalid(_DIFF[_ia]), cmap='RdBu_r',
-                         norm=_dnorm, shading='nearest', zorder=2)
-    _draw_reject(ax, _ra, _c, labels=True)
-    ax.set_title(rf"$\alpha_s=\pi/2\times{_al8[_ia]/(np.pi/2):.1f}$")
-    ax.set_xlabel(r'$B^{1/4}$ [MeV]'); ax.set_ylabel(r'$\Delta_0$ [MeV]')
-    ax.set_xlim(_B48.min(), _B48.max()); ax.set_ylim(_D08.min(), _D08.max())
-    panel_label(ax, f"({chr(97 + _c)})")
-fig.colorbar(_pcm, ax=axes.ravel().tolist(),
-             label=r'$\sigma_{\rm crit}^{\rm unpCFL}-\sigma_{\rm crit}^{\rm CFL}$ [MeV/fm$^2$]',
-             shrink=0.9)
-fig.legend(handles=[Patch(fc='0.55', label='unpCFL: no nucleation (CFL does)')],
-           loc='outside lower center', frameon=False, fontsize=9)
-fig.savefig(f'../output/figures/sigcrit_diff_unpCFL_CFL_{xsd_tag}.pdf', bbox_inches='tight')
 plt.show()
 
 
