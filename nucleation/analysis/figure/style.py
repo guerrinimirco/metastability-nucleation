@@ -28,6 +28,10 @@ STANDARD_COLORS = {
 # as-is on paper. Single column = \columnwidth, full width = \textwidth span.
 PRD_COL_W  = 3.375
 PRD_FULL_W = 7.0
+# Height cap for a full-width four-panel (2×2) figure: keep it within ~half the
+# PRD text height (~9 in) so two figures fit per page. Panels go landscape at
+# this height; fonts stay 10 pt (PRD body). 1×2 figures use half of this.
+PRD_2X2_H  = 4.5
 
 
 def set_paper_style():
