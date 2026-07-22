@@ -60,7 +60,7 @@ def set_paper_style():
     })
 
 
-def paper_grid(layout='2x2', mode='single', placeholder=True):
+def paper_grid(layout='2x2', mode='single', placeholder=True, square=True):
     """Build a square-panelled PRD figure with the publication style applied.
 
     Physics: each panel is forced to an exact 1:1 box aspect so, e.g., an M-R
@@ -75,6 +75,12 @@ def paper_grid(layout='2x2', mode='single', placeholder=True):
                  'centered' -> W = PRD_CENTERED_W (4.75", mid-size)
                  'double'   -> W = PRD_FULL_W     (7.0", two columns)
                2×2 is (W, W); 1×2 is (W, W/2) so its panels match a 2×2 top row.
+      square : True (default) forces an exact 1:1 box on every panel — crisp
+               squares, but because the figsize is fixed the slack dimension
+               leaves a centring margin (harmless: savefig(bbox_inches='tight')
+               crops it). False drops the box constraint so panels stretch to
+               fill the figure (quasi-square, zero centring whitespace) — use it
+               when the on-screen/inline gap bothers you and near-square is fine.
 
     Panels do NOT share axes: every one carries its own x/y axis. With
     placeholder=True (default) each panel gets dummy x/y labels and a title so
@@ -98,8 +104,12 @@ def paper_grid(layout='2x2', mode='single', placeholder=True):
     # sharex/sharey default False: independent axes per the request.
     fig, axes = plt.subplots(nrows, 2, figsize=figsize, layout='constrained',
                              squeeze=False)
+    # Tighten the constrained-layout padding so panels sit closer together and to
+    # the figure edge (less whitespace); edit here to rescale for all figures.
+    fig.get_layout_engine().set(w_pad=0.02, h_pad=0.02, wspace=0.02, hspace=0.02)
     for ax in axes.flat:
-        ax.set_box_aspect(1)        # exact square box, independent of label room
+        if square:
+            ax.set_box_aspect(1)    # exact square box, independent of label room
         if placeholder:
             # Dummy labels/title so the empty template looks complete - real
             # figures pass placeholder=False and set their own.

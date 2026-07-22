@@ -127,9 +127,12 @@ OKAB = dict(orange='#E69F00', sky='#56B4E9', green='#009E73', blue='#0072B2',
 # (poor contrast on white) and no black/grey (reserved for reference lines).
 OKAB_CAT = ('#0072B2', '#E69F00', '#009E73', '#D55E00', '#CC79A7', '#56B4E9')
 
-# Phase line thickness — ONE source of truth so Fig 1 / σ-sweep / Fig 6 stay
-# coherent (unpCFL solid+thick, CFL/unpaired thinner). Edit here to rescale all.
+# Phase line thickness — ONE source of truth so Fig 1 / σ-sweep / Fig 4 stay
+# coherent (unpCFL solid+thick, CFL/unpaired thinner+equal). Edit here to rescale all.
 PHASE_LW = {'unpCFL': 2.1, 'cfl': 1.4, 'unpaired': 1.4}
+# Phase opacity — same single source. unpCFL fully opaque and drawn on top; CFL and
+# unpaired share ONE fainter alpha so the composite reads as the emphasised phase.
+PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.6}
 
 # Precomputed NICER/HESS contours live in the sibling `eos` project; the path
 # is relative to the notebooks/ cwd. Regenerate offline if the samples change.
@@ -1214,6 +1217,29 @@ scan_cases = [
     ('saddlepoint', 'coulomb_minimize', 'cfl'),
 ]
 # -----------------------------------------------------------------------------
+scan_flavor, scan_charge, scan_phase = scan_cases[0]    
+
+# %%
+# =============================================================================
+#  IV.3 grid scan: sigma_crit over (alpha_s, B^1/4, Delta_0), one run per method.
+#  Each (flavor, charge, phase) case = CFL filter (cached, phase-independent) +
+#  sigma_crit, saved to its own .npz, plotted, and summarised. Heavy —
+#  coulomb_minimize re-solves per σ (unpCFL twice). Trim scan_cases / shrink the
+#  grids for a quick first pass.
+# =============================================================================
+# ---- grid knobs -------------------------------------------------------------
+MT0_grid_thr     = [1.4]                                  # nucleation threshold(s) [M_sun]
+alpha_slices     = [0.1 * np.pi / 2, 0.2 * np.pi / 2, 0.3 * np.pi / 2]   # α_s panels
+B4_grid_scan     = np.linspace(130.0, 180.0, 51)         # B^1/4 [MeV]
+Delta0_grid_scan = np.linspace(0.0, 200.0, 51)           # Δ_0  [MeV]
+scan_n_jobs      = -1                                     # joblib workers (-1 = all cores)
+# ---- methods to run: (flavor, charge, phase). The FIRST is the "primary" one,
+#      it drives results_scan + the reload / M-R cells below. Trim to taste.
+scan_cases = [
+    ('saddlepoint', 'coulomb_minimize', 'unpCFL'),
+    ('saddlepoint', 'coulomb_minimize', 'cfl'),
+]
+# -----------------------------------------------------------------------------
 scan_flavor, scan_charge, scan_phase = scan_cases[0]      # primary (downstream default)
 
 results_all = {}
@@ -1348,7 +1374,7 @@ for F1_SET in quark_param_sets[::-1]:
     _PHASE_FILL  = {'unpCFL': True, 'cfl': False, 'unpaired': False}
     _PHASE_LBL   = {'unpCFL': 'unpCFL', 'cfl': 'CFL', 'unpaired': 'unpaired'}
     _PHASE_LW    = PHASE_LW                                        # shared (solid unpCFL thicker)
-    _PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.5, 'unpaired': 0.5}   # fade dashed/dotted phases
+    _PHASE_ALPHA = PHASE_ALPHA                                     # shared opacity (one source)
 
     _stag   = q_tag_of(F1_SET)
     _params = get_alphabag_custom(alpha=F1_SET['alpha'], B4=F1_SET['B4'], m_s=F1_SET['m_s'])
@@ -1376,8 +1402,8 @@ for F1_SET in quark_param_sets[::-1]:
         return int(np.argmin(np.abs(_Tg - T)))
 
 
-    # PRD size: mode='centered' (4.75" square). Change to 'single'/'double' to resize.
-    fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='centered', placeholder=False)
+    # PRD size: mode='double' (4.75" square). Change to 'single'/'double' to resize.
+    fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False)
 
     # ---- (a) W(R): density = colour, phase = line style ----
     _cA = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1_DENS)))
@@ -1455,7 +1481,7 @@ for F1_SET in quark_param_sets[::-1]:
 
 
 # %% [markdown]
-# ### Paper Figure 1 (σ-sweep) — same panels but T fixed, coloured by σ
+# ### Paper Figure 1b (σ-sweep) — same panels but T fixed, coloured by σ
 #
 # Mirror of Fig 1 with the roles of $T$ and $\sigma$ swapped: fix $T$, sweep
 # $\sigma$ (colour). **(a)** $W(R)$ at one $n_B^H$; **(b,c,d)** $R_*$, $W_*/T$,
@@ -1469,7 +1495,7 @@ for F1_SET in quark_param_sets[::-1]:
 #  Self-contained (mirrors Fig 1): pick the quark parametrization here — no
 #  longer inherits the Fig-1 loop's leaked bindings.
 # ============================================================================
-F1_SET     = quark_param_sets[0]       # <-- SELECT quark parametrization (also sets Delta0)
+F1_SET     = quark_param_sets[1]       # <-- SELECT quark parametrization (also sets Delta0)
 F1_FLAVOR  = 'saddlepoint'             # 'frozen' | 'saddlepoint'
 F1_CHARGE  = 'coulomb_minimize'        # 'lcn' | 'gcn' | 'coulomb_minimize'
 F1_YLH     = 0.25
@@ -1483,7 +1509,7 @@ _PHASE_LS    = {'unpCFL': '-', 'cfl': '--', 'unpaired': ':'}
 _PHASE_FILL  = {'unpCFL': True, 'cfl': False, 'unpaired': False}
 _PHASE_LBL   = {'unpCFL': 'unpCFL', 'cfl': 'CFL', 'unpaired': 'unpaired'}
 _PHASE_LW    = PHASE_LW                                        # shared thickness
-_PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.55}
+_PHASE_ALPHA = PHASE_ALPHA                                     # shared opacity (one source)
 
 _stag   = q_tag_of(F1_SET)
 _params = get_alphabag_custom(alpha=F1_SET['alpha'], B4=F1_SET['B4'], m_s=F1_SET['m_s'])
@@ -1511,8 +1537,8 @@ def _iT(T):
 
 _cS = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1S_SIGMAS)))
 
-# PRD size: mode='centered' (4.75" square). Change to 'single'/'double' to resize.
-fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='centered', placeholder=False)
+# PRD size: mode='double' (4.75" square). Change to 'single'/'double' to resize.
+fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False)
 
 # ---- (a) W(R) at fixed (T, n_B): colour = σ, line style = phase ----
 _Rg = np.linspace(0.01, 14.0, 400)
@@ -1577,7 +1603,7 @@ axD.axhline(np.log10(1e-3), color='k', ls=(0, (1, 1)), lw=0.9)   # τ = 1 ms
 axD.set_ylim(-60, 60); axD.set_title(rf'$Y_L^H={F1_YLH}$, $T={F1S_T:.0f}$ MeV')
 panel_label(axD, '(d)', corner='lower')
 
-fig.savefig(f'../output/figures/paper_fig1_sigma_sweep_{xsd_tag}_{_stag}.pdf', bbox_inches='tight')
+fig.savefig(f'../output/figures/paper_fig1b_sigma_sweep_{xsd_tag}_{_stag}.pdf', bbox_inches='tight')
 plt.show()
 
 
@@ -1731,8 +1757,8 @@ def _grid(ax):
 
 
 
-# PRD size: mode='centered' (4.75" square). Change to 'single'/'double' to resize.
-fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='centered', placeholder=False)
+# PRD size: mode='double' (4.75" square). Change to 'single'/'double' to resize.
+fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False)
 
 # (a) M-R.  Fix the view FIRST so the constraint fills (some reach R~21) can't
 #     auto-expand the axis and fling the labels into the margin.
@@ -1788,19 +1814,219 @@ fig.savefig(f'../output/figures/paper_fig2_stellar_sequences_{xsd_tag}.pdf', bbo
 plt.show()
 
 # %% [markdown]
-# ### Paper Figure 6 — $T_{\rm nuc}(n_B^H)$ nucleation conditions
+# ### Paper Figure 3 — $R_*$, $W_*/T$, $\log_{10}\tau$, $\sigma_{\rm crit}$ at the PNS centre vs $M_{\rm PNS}$
+#
+# One figure for the SELECTED quark set (`FN2_SET`) and σ set (`FN2_SIGMAS`),
+# 2×2 like Figs 1–2. **(a,b,c)** $R_*$, $W_*/T$, $\log_{10}\tau$ along the
+# trapped/isentropic sequence at fixed $(Y_L^H, S_H)=$ t_Tmax; colour = $\sigma$,
+# line style = phase (unpaired ':' , CFL '--', unpCFL '-'). **(d)** the critical
+# surface tension $\sigma_{\rm crit}$ at which the central $\tau$ equals a target
+# (a `nuc_an.sigma_target_pt` root-find at each $M_{\rm PNS}$' centre $n_B^H$);
+# line style = phase, colour = quark set (`FN2_D_MODE='quarks'`, $\tau$=`FN2_TAU`)
+# or $\tau$ target (`'tau'`, $\tau\in$`FN2_D_TAUS`). Red vertical guides (dashed =
+# fixed $M_{\rm PNS}$, dotted = $M_b$-matched to a cold star) as in the caption.
+# No gridlines, no in-figure title.
+
+# %%
+# ============================================================================
+#  Figure 3.  R*, W*/T and log10(tau) at the PNS centre vs M_PNS.
+#    rows = observable;  columns = quark parametrization.
+#    colour = sigma;  line style: unpaired ':', CFL '--', unpCFL '-'.
+#  Vertical guides: dashed = M_PNS = 1, 1.4;  dotted = the M_PNS whose baryonic
+#  mass equals Mb of a COLD (T=0) star with M(T0) = 1, 1.4 (same star, cooled).
+#  The (M_PNS -> n_Bc -> T_c) map is hadronic-only: built ONCE, reused.
+# ============================================================================
+set_paper_style()
+
+# ---- knobs ----
+FN2_YL, FN2_S       = PNS_TMAX['YLH'], PNS_TMAX['S']   # trapped-PNS (Y_L, S) = t_Tmax
+FN2_FLAVOR          = 'saddlepoint'
+FN2_CHARGE          = 'coulomb_minimize'
+FN2_TAU             = None               # s (target line on the log10 tau panel)
+FN2_MVERT           = []         # masses for the vertical (red) guides
+# ---- SELECT what to plot ----
+FN2_SET             = quark_param_sets[1]                 # <-- quark parametrization (panels a–c)
+FN2_SIGMAS          = list([80,100,150])                    # <-- σ SET drawn in a–c (colour); edit freely, e.g. [50, 100, 200]
+FN2_VGUIDE_COL      = STANDARD_COLORS['Red']              # vertical mass-guide colour
+# ---- panel (d): σ_crit(τ=target) vs M_PNS ----
+FN2_D_MODE          = 'tau'            # (d) colour: 'quarks' (all quark_param_sets, τ=FN2_TAU)
+                                          #             or 'tau' (FN2_SET only, τ ∈ FN2_D_TAUS)
+FN2_D_TAUS          = [1e-3, 1.0, 100.0]  # s — τ targets when FN2_D_MODE=='tau'
+FN2_D_NM            = 100                   # M_PNS samples in (d); each is a σ root-find → keep modest
+_phase_ls = [('unpaired', ':'), ('cfl', '--'), ('unpCFL', '-')]
+_sig_col  = {sg: mpl.cm.viridis(t) for sg, t in
+             zip(FN2_SIGMAS, np.linspace(0.15, 0.85, len(FN2_SIGMAS)))}
+from dataclasses import replace as _dc_replace              # vary τ_target per curve in (d)
+from eos.alphabag.thermodynamics_quarks import T_critical   # CFL Tc (mask CFL above it)
+
+# ---- PNS sequence (quark-independent): M_PNS -> (n_Bc, T_c) ----
+def _tov_trapped_seq(YL, S):
+    key = min(tov_trapped, key=lambda k: abs(k[0] - YL) + abs(k[1] - S))
+    return tov_trapped[key]
+
+def _binterp(arr, xcol, ycol):
+    """interp ycol(xcol) on a TOV sequence's stable branch (up to M_max)."""
+    k = np.argmax(arr[:, 4]) + 1
+    return interp1d(arr[:k, xcol], arr[:k, ycol], kind='cubic',
+                    bounds_error=False, fill_value=np.nan)
+
+_tov = _tov_trapped_seq(FN2_YL, FN2_S)        # cols: 2=n_Bc 4=M 5=Mb
+_i   = np.argmax(_tov[:, 4]) + 1              # stable branch up to M_max
+_msk = _tov[:_i, 4] >= 0.6                    # show from 0.6 M_sun up
+M_seq   = _tov[:_i, 4][_msk]
+nBc_seq = _tov[:_i, 2][_msk]
+T_seq   = np.asarray(H['iso_trapped']['T'](nBc_seq, FN2_YL, FN2_S))
+M_max   = float(_tov[:_i, 4].max())
+
+# Vertical guides: dashed at fixed M_PNS; dotted at the M_PNS baryon-matched to
+# the cold (T=0) star of the same gravitational mass.
+_cold_M_to_Mb   = _binterp(tov_cold, 4, 5)    # cold:    M    -> Mb
+_trap_Mb_to_M   = _binterp(_tov,     5, 4)    # trapped: Mb   -> M
+M_dot = [float(_trap_Mb_to_M(_cold_M_to_Mb(m0))) for m0 in FN2_MVERT]
+
+# panels (a,b,c): (ylabel, getter(itp), yscale, ylim) — from the stored tables.
+# Labels use subscript-star R_*, W_* per the paper convention.
+_abc = [
+    (r'$R_*$ [fm]',
+     lambda itp: np.array([itp['R_c'](nb, _YL, T) for nb, T in zip(nBc_seq, T_seq)]),
+     'linear', (1, 7)),
+    (r'$W_*/T$',
+     lambda itp: np.array([itp['W_c'](nb, _YL, T) for nb, T in zip(nBc_seq, T_seq)]) / T_seq,
+     'linear', (0, 500)),
+    (r'$\log_{10}\,\tau$ [s]',
+     lambda itp: np.array([itp['log10_tau'](nb, _YL, T) for nb, T in zip(nBc_seq, T_seq)]),
+     'linear', (-40, 80)),
+]
+
+# ---- ONE figure for the selected parametrization (2×2: a=R_*, b=W_*/T, c=log10 τ, d=σ_crit) ----
+_tag     = q_tag_of(FN2_SET)
+_params  = get_alphabag_custom(alpha=FN2_SET['alpha'], B4=FN2_SET['B4'], m_s=FN2_SET['m_s'])
+_D0      = FN2_SET['Delta0']
+_T_CFL   = float(T_critical(_D0))                     # CFL undefined above this
+
+# PRD size knob: mode='single'(3.375") / 'centered'(4.75") / 'double'(7.0"), all square.
+# No sharex (new mode) — every panel carries its own x-axis + label.
+fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False)
+_abc_axes = [axA, axB, axC]
+
+# nearest table Y_L to FN2_YL (the getters read the interpolators at _YL)
+_a0 = next((nuc_sets[k] for k in nuc_sets
+            if k.endswith(f"_{_tag}_s{int(FN2_SIGMAS[0])}")), None)
+_YL = (float(_a0.hadronic_grids['Y_L_H'][
+           np.argmin(np.abs(_a0.hadronic_grids['Y_L_H'] - FN2_YL))])
+       if _a0 is not None else FN2_YL)
+
+# (a,b,c) R_*, W_*/T, log10 τ vs M — colour = σ, line style = phase (from stored tables)
+for sg in FN2_SIGMAS:
+    for ph, ls in _phase_ls:
+        stem = f"Htrapped_{FN2_FLAVOR}_{FN2_CHARGE}_{ph}_{_tag}_s{int(sg)}"
+        if stem not in nuc_sets:
+            continue
+        itp = build_thermal_nucleation_interpolators(nuc_sets[stem])
+        for ax, (_, getter, _sc, _yl) in zip(_abc_axes, _abc):
+            ax.plot(M_seq, getter(itp), color=_sig_col[sg], ls=ls,
+                    lw=PHASE_LW[ph], alpha=PHASE_ALPHA[ph])
+for ax, (ylab, _, sc, ylim) in zip(_abc_axes, _abc):
+    ax.set_ylabel(ylab); ax.set_yscale(sc)
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+#axC.axhline(np.log10(FN2_TAU), color='0.5', ls='--', lw=1.0)   # τ_target on (c)
+
+# ---- (d) σ_crit(τ=target) vs M_PNS ----
+# line style = phase; colour = quark set (FN2_D_MODE=='quarks', τ=FN2_TAU) OR τ target
+# ('tau', FN2_SET). Each point is a nuc_an.sigma_target_pt root-find, so use a coarser
+# M grid (FN2_D_NM) sampled from the SAME t_Tmax central (n_B, T) sequence as (a–c).
+_nBc_of_M = interp1d(M_seq, nBc_seq, kind='cubic', bounds_error=False, fill_value=np.nan)
+_T_of_M   = interp1d(M_seq, T_seq,   kind='cubic', bounds_error=False, fill_value=np.nan)
+_Md  = np.linspace(M_seq.min(), M_seq.max(), FN2_D_NM)
+_nBd, _Td = _nBc_of_M(_Md), _T_of_M(_Md)
+
+
+def _sigma_crit_vs_M(params, D0, phase, nuc_cfg):
+    """σ_crit(M_PNS) [MeV/fm²]: the σ at which the CENTRAL τ = nuc_cfg.tau_target, at
+    each M_PNS' centre (n_B, T) on the t_Tmax isentrope (the user's 'centre n_B^H').
+    NaN where no τ=target crossing exists, or where CFL is above its melting T_c."""
+    Tc_cfl = float(T_critical(D0))
+    out = np.full(len(_Md), np.nan)
+    for k, (nb, T) in enumerate(zip(_nBd, _Td)):
+        if not (np.isfinite(nb) and np.isfinite(T)):
+            continue
+        if phase == 'cfl' and T > Tc_cfl:
+            continue                                   # CFL gap melted → no CFL droplet
+        H_pt = nuc_an.hadronic_point(H['trapped'], nb, FN2_YL, T)
+        s = nuc_an.sigma_target_pt(H_pt, T, FN2_FLAVOR, FN2_CHARGE, phase,
+                                   params, D0, nuc_cfg)
+        out[k] = s if np.isfinite(s) else np.nan       # ±inf (σ_crit outside scan) → gap
+    return out
+
+
+def _tau_lbl(t):
+    return f'{t*1e3:g} ms' if t < 1 else f'{t:g} s'
+
+
+if FN2_D_MODE == 'quarks':                             # colour = quark parametrization, τ = FN2_TAU
+    _dcol = {q_tag_of(p): mpl.cm.plasma(t) for p, t in
+             zip(quark_param_sets, np.linspace(0.15, 0.8, max(len(quark_param_sets), 2)))}
+    for p in quark_param_sets:
+        _pp = get_alphabag_custom(alpha=p['alpha'], B4=p['B4'], m_s=p['m_s'])
+        for ph, ls in _phase_ls:
+            axD.plot(_Md, _sigma_crit_vs_M(_pp, p['Delta0'], ph, _nuc_cfg),
+                     color=_dcol[q_tag_of(p)], ls=ls, lw=PHASE_LW[ph], alpha=PHASE_ALPHA[ph])
+    _d_handles = [Line2D([], [], color=_dcol[q_tag_of(p)], label=q_tag_of(p))
+                  for p in quark_param_sets]
+    _d_title = 'quark set'
+else:                                                  # colour = τ target, one set (FN2_SET)
+    _dcol = {t: mpl.cm.plasma(u) for t, u in
+             zip(FN2_D_TAUS, np.linspace(0.15, 0.8, max(len(FN2_D_TAUS), 2)))}
+    for tau in FN2_D_TAUS:
+        for ph, ls in _phase_ls:
+            axD.plot(_Md, _sigma_crit_vs_M(_params, _D0, ph,
+                                           _dc_replace(_nuc_cfg, tau_target=tau)),
+                     color=_dcol[tau], ls=ls, lw=PHASE_LW[ph], alpha=PHASE_ALPHA[ph])
+    _d_handles = [Line2D([], [], color=_dcol[t], label=_tau_lbl(t)) for t in FN2_D_TAUS]
+    _d_title = r'$\tau$'
+axD.set_ylabel(r'$\sigma_{\rm crit}$ [MeV/fm$^2$]')
+axD.set_ylim(50, 200)                                  # (d) σ_crit range — edit here
+axD.legend(handles=_d_handles, loc='best', title=_d_title, fontsize=8)
+
+# common cosmetics: red vertical mass guides, xlim, per-panel x-label, panel tag (no grid)
+for _lab, ax in zip(('(a)', '(b)', '(c)', '(d)'), (axA, axB, axC, axD)):
+    ax.set_xlim(0.7, M_max)
+    ax.set_xlabel(r'$M_{\rm PNS}\ [M_\odot]$')         # every panel labelled (no sharex)
+    for mv in FN2_MVERT:                       # dashed: fixed M_PNS
+        ax.axvline(mv, color=FN2_VGUIDE_COL, ls='--', lw=1.0, zorder=1)
+    for md in M_dot:                           # dotted: Mb-matched to cold
+        if np.isfinite(md):
+            ax.axvline(md, color=FN2_VGUIDE_COL, ls=':', lw=1.0, zorder=1)
+    panel_label(ax, _lab, corner='upper left')
+
+# legends: phase (line style) on (a); σ colour on (b); panel (d) carries its own.
+_ph = [Line2D([], [], color='k', ls=ls, label=lbl)
+       for lbl, ls in [('unpaired', ':'), ('CFL', '--'), ('unpCFL', '-')]]
+_sg = [Line2D([], [], color=_sig_col[sg], ls='-', label=rf'$\sigma={int(sg)}$')
+       for sg in FN2_SIGMAS]
+axA.legend(handles=_ph, loc='best')
+axB.legend(handles=_sg, loc='best', title=r'$\sigma$ [MeV/fm$^2$]')
+
+fig.savefig(f'../output/figures/paper_fig3_Rstar_Wc_tau_sigmacrit_{xsd_tag}_{_tag}.pdf',
+            bbox_inches='tight')
+plt.show()
+
+
+# %% [markdown]
+# ### Paper Figure 4 — $T_{\rm nuc}(n_B^H)$ nucleation conditions
 #
 # One figure per quark parametrization. $\tau=\tau_{\rm target}$ curves in
 # $(n_B^H, T)$, one line per $\sigma$ (colour) and phase (line style). The
 # stellar isentrope is drawn in the snapshot colour (orange $t_0$, red
 # $t_{T_\mathrm{max}}$); markers on it mark the PNS central density (filled +
 # labelled: fixed $M=1,1.2,1.4,1.6$, star = $M_{\max}$; open: $M_b$-matched to a
-# cold star). **(a)** $t_0$: $Y_L^H=0.35,\,S^H=1.5$   **(b)** $t_{T_\mathrm{max}}$: $Y_L^H=0.25,\,S^H=2$.
+# cold star). **(a)** $t_0$: $Y_L^H=0.35,\,S_H=1.5$   **(b)** $t_{T_\mathrm{max}}$: $Y_L^H=0.25,\,S_H=2$.
 
 # %%
 # ============================================================================
-#  Figure 6.  T_nuc(n_B^H) nucleation-condition curves — ONE figure per quark set.
-#    Two panels: (a) t_0 (Y_L^H=0.35, S^H=1.5),  (b) t_Tmax (Y_L^H=0.25, S^H=2.0).
+#  Figure 4.  T_nuc(n_B^H) nucleation-condition curves — ONE figure per quark set.
+#    Two panels: (a) t_0 (Y_L^H=0.35, S_H=1.5),  (b) t_Tmax (Y_L^H=0.25, S_H=2.0).
 #    colour = sigma;  line style: unpaired ':', CFL '--', unpCFL '-'.
 #    isentrope T(n_B^H) dash-dot in the snapshot colour (orange t_0, red t_Tmax).
 #    Markers ON the isentrope mark the PNS central density n_Bc (Fig-2 c/d style):
@@ -1829,7 +2055,7 @@ from eos.alphabag.thermodynamics_quarks import T_critical   # same Tc as the CFL
 # two thinner and faded (unpCFL drawn last -> on top).  Order = draw order.
 _PHASE_LS    = {'unpaired': ':', 'cfl': '--', 'unpCFL': '-'}
 _PHASE_LW    = PHASE_LW                                        # shared thickness
-_PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.55}
+_PHASE_ALPHA = PHASE_ALPHA                                     # shared opacity (one source)
 _PHASE_LBL   = {'unpaired': 'unpaired', 'cfl': 'CFL', 'unpCFL': 'unpCFL'}
 # σ -> colour is built PER set inside the loop (each set has its own F6_SIGMAS).
 
@@ -1906,11 +2132,12 @@ for FN_SET in quark_param_sets:
     _panels = [dict(**PNS_T0,   lab='(a)'),         # left  = t_0
                dict(**PNS_TMAX, lab='(b)')]         # right = t_Tmax
 
-    # PRD size: mode='centered' (4.75" wide, half height → panels match a 2×2 top row).
+    # PRD size: mode='double' (4.75" wide, half height → panels match a 2×2 top row).
     # Change to 'single'/'double' to resize.
-    fig, axes = paper_grid('1x2', mode='centered', placeholder=False)
+    fig, axes = paper_grid('1x2', mode='double', placeholder=False)
+    axes = axes[0]      # paper_grid axes are 2-D (1×2); flatten to a 1-D row of 2 panels
     # NOTE: no sharey — both panels carry their own T_nuc axis (same ylim set below)
-    for ax, pan in zip(axes[0], _panels):   # axes is 2-D (1×2) → row 0 is the panels
+    for ax, pan in zip(axes, _panels):
         YL, S, col = pan['YLH'], pan['S'], pan['color']
         YL_used = None
         for sg in F6_SIGMAS:
@@ -1960,313 +2187,13 @@ for FN_SET in quark_param_sets:
                          title=r'$\sigma\;[\mathrm{MeV\,fm^{-2}}]$')
     _lg.get_title()#.set_fontsize(12)                   # smaller units title
 
-    fig.savefig(f'../output/figures/paper_fig6_Tnuc_{xsd_tag}_{_tag}.pdf',
+    fig.savefig(f'../output/figures/paper_fig4_Tnuc_{xsd_tag}_{_tag}.pdf',
                 bbox_inches='tight')
     plt.show()
 
 
 # %% [markdown]
-# ### Paper Figure 6b — critical-droplet observables *along* the $\tau=\tau_{\rm nuc}$ curve
-#
-# At fixed $Y_L^H$ we walk the nucleation curve $T_{\rm nuc}(n_B^H)$ (the $T$ where
-# $\tau=\tau_{\rm nuc}$, same construction as Fig 6) and read the critical-droplet
-# observables *at each* $(n_B^H, Y_L^H, T_{\rm nuc})$, vs $n_B^H$:
-# **(a)** $R_*$, **(b)** $W_*/T$, **(c)** the droplet baryon number
-# $N_B=\tfrac{4}{3}\pi R_*^3\,n_B^H$, **(d)** the hadronic strangeness $Y_S^H$.
-# **(e)** re-evaluates $\tau$ on the curve (via $\log_{10}\tau$, as the finder does)
-# as a self-consistency check — it should sit on $\tau_{\rm nuc}$.
-# Colour = $\sigma$, line style = phase (unpaired/CFL/unpCFL), as in Fig 6.
-
-# %%
-# ============================================================================
-#  Fig 6b.  Critical-droplet observables along the tau=tau_nuc nucleation curve.
-#    x = n_B^H;  colour = sigma;  line style: unpaired ':', CFL '--', unpCFL '-'.
-#    T_nuc(n_B^H) from compute_nucleation_density (scan='n_B'); observables read
-#    off the (n_B^H, Y_L^H, T) grid interpolators at (n_B^H, Y_L^H, T_nuc).
-# ============================================================================
-set_paper_style()
-from eos.alphabag.thermodynamics_quarks import T_critical
-
-# ---- knobs ----
-QN_SET    = quark_param_sets[2]          # quark parametrization (one figure)
-QN_FLAVOR = 'saddlepoint'
-QN_CHARGE = 'coulomb_minimize'
-QN_YLH    = 0.25                         # fixed Y_L^H
-QN_TAU    = 1e-3                         # tau_nuc [s]
-QN_SIGMAS = sigma_list                   # which sigmas to draw (subset of sigma_list; colours stay fixed)
-QN_SHOW_DP = True                        # panel (f): bulk ΔP=P_Q*-P_H along the curve
-QN_CUT_CFL_ABOVE_TC = True               # drop CFL points with T_nuc > T_CFL (gap gone)
-_qtag  = q_tag_of(QN_SET)
-_QN_TC = float(T_critical(QN_SET['Delta0']))
-_qn_params = get_alphabag_custom(alpha=QN_SET['alpha'], B4=QN_SET['B4'], m_s=QN_SET['m_s'])
-_qn_D0     = QN_SET['Delta0']
-
-def _dP_along(nb, Tn, ph, yl):
-    """bulk ΔP = P_Q*-P_H [MeV/fm^3] at each (n_B^H, yl, T_nuc) point of the curve.
-    Q* is solved at matched mu_B (saddlepoint), so this is the DRIVING pressure for
-    the transition: ΔP>0 favours quark matter, ΔP<0 would re-hadronize. Reuses the
-    engine's rehad_pressure_profile per point since T_nuc varies along the curve.
-    ponytail: one solver build per point (~len(nb) x |sigma| x |phase|); if too slow,
-    trim QN_SIGMAS or set QN_SHOW_DP=False."""
-    dP = np.full(len(nb), np.nan)
-    for i, (n_i, T_i) in enumerate(zip(nb, Tn)):
-        _, d = nuc_an.rehad_pressure_profile(
-            H['trapped'], _qn_params, [n_i], Y_L_H=yl, T=T_i,
-            flavor_mode=QN_FLAVOR, electric_charge_mode=QN_CHARGE,
-            quark_phase=ph, Delta0=_qn_D0)
-        dP[i] = d[0]
-    return dP
-
-# phase styling — same convention as Fig 6 (unpCFL solid+thick, others faded)
-_QN_LS    = {'unpaired': ':', 'cfl': '--', 'unpCFL': '-'}   # order = draw order
-_QN_LW    = PHASE_LW                                        # shared thickness (see Fig 6)
-_QN_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.55}
-_QN_LBL   = {'unpaired': 'unpaired', 'cfl': 'CFL', 'unpCFL': 'unpCFL'}
-_qsig_col = {sg: mpl.cm.viridis(t) for sg, t in
-             zip(sigma_list, np.linspace(0.15, 0.85, len(sigma_list)))}
-
-fig, axes = plt.subplots(2, 4, figsize=(18, 8), constrained_layout=True)
-axA, axB, axC, axD, axE, axF, axL, axZ = axes.ravel()
-axL.axis('off'); axZ.axis('off')         # 7th panel holds the legends, 8th empty
-if not QN_SHOW_DP:
-    axF.axis('off')
-YLu = QN_YLH
-for sg in QN_SIGMAS:
-    for ph in _QN_LS:                    # unpCFL last -> drawn on top
-        stem = f"Htrapped_{QN_FLAVOR}_{QN_CHARGE}_{ph}_{_qtag}_s{int(sg)}"
-        if stem not in nuc_sets:
-            continue
-        obs   = nuc_sets[stem]
-        grids = obs.hadronic_grids
-        iYL   = int(np.argmin(np.abs(grids['Y_L_H'] - QN_YLH)))
-        YLu   = float(grids['Y_L_H'][iYL])          # snap to the grid node
-        res   = compute_nucleation_density(obs, tau_target=QN_TAU, scan='n_B')
-        nBH, Tnuc = nucleation_curve(res, iYL)       # T_nuc(n_B^H): tau=tau_nuc
-        itp   = build_thermal_nucleation_interpolators(obs)  # R_c/W_c/log10_tau on the grid
-
-        m = np.isfinite(nBH) & np.isfinite(Tnuc)
-        if QN_CUT_CFL_ABOVE_TC and ph == 'cfl':
-            m &= (Tnuc <= _QN_TC)                    # CFL undefined above Tc
-        if not m.any():
-            continue
-        nb, Tn = nBH[m], Tnuc[m]
-        x = nb / n_sat
-        # read observables at each (n_B^H, Y_L^H, T_nuc) point along the curve.
-        # R*/W*/Y_S vary smoothly -> linear interp; tau spans ~70 decades so use
-        # the log10_tau interpolator (matches how the curve finder locates T_nuc).
-        Rstar = np.array([itp['R_c'](_n, YLu, _T) for _n, _T in zip(nb, Tn)])
-        Wc    = np.array([itp['W_c'](_n, YLu, _T) for _n, _T in zip(nb, Tn)])
-        tauc  = 10.0 ** np.array([itp['log10_tau'](_n, YLu, _T) for _n, _T in zip(nb, Tn)])
-        YSH   = np.array([float(H['trapped']['Y_S'](_n, YLu, _T)) for _n, _T in zip(nb, Tn)])
-        NB    = (4.0 / 3.0) * np.pi * Rstar**3 * nb  # baryons in the critical droplet (ambient n_B^H)
-
-        kw = dict(color=_qsig_col[sg], ls=_QN_LS[ph], lw=_QN_LW[ph], alpha=_QN_ALPHA[ph])
-        axA.plot(x, Rstar, **kw)
-        axB.plot(x, Wc / Tn, **kw)
-        axC.plot(x, NB, **kw)
-        axD.plot(x, YSH, **kw)
-        axE.plot(x, tauc, **kw)
-        if QN_SHOW_DP:
-            axF.plot(x, _dP_along(nb, Tn, ph, YLu), **kw)
-
-_data_axes = (axA, axB, axC, axD, axE) + ((axF,) if QN_SHOW_DP else ())
-for ax in _data_axes:
-    ax.set_xlabel(r'$n_B^H/n_{\rm sat}$')
-axA.set_ylabel(r'$R_*$ [fm]');                          axA.set_title('(a) critical radius')
-axB.set_ylabel(r'$W_*/T$');                             axB.set_title('(b) barrier / T')
-axC.set_ylabel(r'$N_B=\frac{4}{3}\pi R_*^3\,n_B^H$');   axC.set_title('(c) droplet baryon number')
-axD.set_ylabel(r'$Y_S^H$');                             axD.set_title('(d) hadronic strangeness')
-axE.set_ylabel(r'$\tau$ [s]');                          axE.set_title(r'(e) $\tau$ check')
-axE.axhline(QN_TAU, color='k', ls=(0, (1, 1)), lw=1.0)  # tau_nuc reference
-axE.set_yscale('log')
-if QN_SHOW_DP:
-    axF.set_ylabel(r'$\Delta P = P_{Q^*}-P_H$ [MeV/fm$^3$]')
-    axF.set_title('(f) bulk pressure gap')
-    axF.axhline(0, color='k', ls=(0, (1, 1)), lw=1.0)   # ΔP=0 = re-hadronization threshold
-
-# legends in the empty 6th panel
-_ph_h  = [Line2D([], [], color='k', ls=_QN_LS[p], lw=_QN_LW[p], alpha=_QN_ALPHA[p],
-                 label=_QN_LBL[p]) for p in _QN_LS]
-_sig_h = [Line2D([], [], color=_qsig_col[sg], ls='-', label=f'{int(sg)}') for sg in QN_SIGMAS]
-_l1 = axL.legend(handles=_ph_h, loc='upper left', title='phase'); axL.add_artist(_l1)
-axL.legend(handles=_sig_h, loc='upper right', title=r'$\sigma\;[\mathrm{MeV\,fm^{-2}}]$')
-
-fig.suptitle(rf"$Y_L^H={YLu:.2f}$, $\tau_{{\rm nuc}}={QN_TAU*1e3:g}$ ms — "
-             rf"{QN_FLAVOR}/{QN_CHARGE} — {_qtag}", y=1.03)
-fig.savefig(f'../output/figures/fig6b_droplet_obs_{xsd_tag}_{_qtag}.pdf', bbox_inches='tight')
-plt.show()
-
-
-# %% [markdown]
-# ### Paper Figure 7 — $\Delta f$, $R^*$, $W^*/T$, $\log_{10}\tau$ at the PNS centre vs $M_{\rm PNS}$
-#
-# One figure for the SELECTED quark set (`FN2_SET`) and σ subset (`FN2_SIGMAS`),
-# 2×2 like Figs 1–2. **(a)** the two σ-independent bulk driving forces $\Delta f$:
-# CFL (dashed) and unpaired (dotted) — valid for all σ; unpCFL is their hybrid
-# (CFL for $R<R_\Delta$, unpaired above) so it is not a separate line. **(b,c,d)**
-# $R^*$, $W^*/T$, $\log_{10}\tau$ along the trapped/isentropic sequence at fixed
-# $(Y_L^H, S^H)$; colour = $\sigma$, line style = phase. Red vertical guides
-# (dashed = fixed $M_{\rm PNS}$, dotted = $M_b$-matched to a cold star) are
-# described in the caption. No gridlines, no in-figure title.
-
-# %%
-# ============================================================================
-#  Figure 7.  R*, W*/T and log10(tau) at the PNS centre vs M_PNS.
-#    rows = observable;  columns = quark parametrization.
-#    colour = sigma;  line style: unpaired ':', CFL '--', unpCFL '-'.
-#  Vertical guides: dashed = M_PNS = 1, 1.4;  dotted = the M_PNS whose baryonic
-#  mass equals Mb of a COLD (T=0) star with M(T0) = 1, 1.4 (same star, cooled).
-#  The (M_PNS -> n_Bc -> T_c) map is hadronic-only: built ONCE, reused.
-# ============================================================================
-set_paper_style()
-
-# ---- knobs ----
-FN2_YL, FN2_S       = PNS_TMAX['YLH'], PNS_TMAX['S']   # trapped-PNS (Y_L, S) = t_Tmax
-FN2_FLAVOR          = 'saddlepoint'
-FN2_CHARGE          = 'coulomb_minimize'
-FN2_TAU             = 1e-3               # s (target line on the log10 tau panel)
-FN2_MVERT           = [1.0, 1.4]         # masses for the vertical (red) guides
-# ---- SELECT what to plot ----
-FN2_SET             = quark_param_sets[0]                 # <-- quark parametrization
-FN2_SIGMAS          = sigma_list                          # <-- σ subset to draw (colour)
-FN2_VGUIDE_COL      = STANDARD_COLORS['Red']              # vertical mass-guide colour
-_phase_ls = [('unpaired', ':'), ('cfl', '--'), ('unpCFL', '-')]
-_sig_col  = {sg: mpl.cm.viridis(t) for sg, t in
-             zip(FN2_SIGMAS, np.linspace(0.15, 0.85, len(FN2_SIGMAS)))}
-from eos.alphabag.thermodynamics_quarks import T_critical   # CFL Tc (mask CFL above it)
-
-# ---- PNS sequence (quark-independent): M_PNS -> (n_Bc, T_c) ----
-def _tov_trapped_seq(YL, S):
-    key = min(tov_trapped, key=lambda k: abs(k[0] - YL) + abs(k[1] - S))
-    return tov_trapped[key]
-
-def _binterp(arr, xcol, ycol):
-    """interp ycol(xcol) on a TOV sequence's stable branch (up to M_max)."""
-    k = np.argmax(arr[:, 4]) + 1
-    return interp1d(arr[:k, xcol], arr[:k, ycol], kind='cubic',
-                    bounds_error=False, fill_value=np.nan)
-
-_tov = _tov_trapped_seq(FN2_YL, FN2_S)        # cols: 2=n_Bc 4=M 5=Mb
-_i   = np.argmax(_tov[:, 4]) + 1              # stable branch up to M_max
-_msk = _tov[:_i, 4] >= 0.6                    # show from 0.6 M_sun up
-M_seq   = _tov[:_i, 4][_msk]
-nBc_seq = _tov[:_i, 2][_msk]
-T_seq   = np.asarray(H['iso_trapped']['T'](nBc_seq, FN2_YL, FN2_S))
-M_max   = float(_tov[:_i, 4].max())
-
-# Vertical guides: dashed at fixed M_PNS; dotted at the M_PNS baryon-matched to
-# the cold (T=0) star of the same gravitational mass.
-_cold_M_to_Mb   = _binterp(tov_cold, 4, 5)    # cold:    M    -> Mb
-_trap_Mb_to_M   = _binterp(_tov,     5, 4)    # trapped: Mb   -> M
-M_dot = [float(_trap_Mb_to_M(_cold_M_to_Mb(m0))) for m0 in FN2_MVERT]
-
-# ---- panel (a): the TWO bulk driving forces Δf_CFL, Δf_unpaired ----
-# Both are σ- and R-independent, so valid for ALL σ. The composite unpCFL is NOT
-# a third value: it uses CFL for R<Rx and unpaired for R>Rx, so its Δf at R* jumps
-# between these two lines as R* crosses Rx (σ-dependent) — hence unpCFL is not
-# drawn here; the caption notes it follows CFL (small droplets) then unpaired.
-_Rg_df = np.array([0.5, 1.0, 2.0])                    # Δf is R-independent for a pure phase
-
-
-def _delta_f_bulk(params, D0, phase, sig_ref):
-    """Bulk Δf [MeV/fm³] of a PURE phase ('cfl'|'unpaired') along the PNS sequence
-    — the intrinsic driving force, independent of σ and R. NaN where the quark
-    composition has no solution. sig_ref only feeds the barrier call; Δf ignores it."""
-    out = np.full(len(M_seq), np.nan)
-    for k, (nb, T) in enumerate(zip(nBc_seq, T_seq)):
-        eb = compute_energy_barrier(
-            H['trapped'], nb, T, sig_ref,
-            electric_charge_mode=FN2_CHARGE, params=params, flavor_mode=FN2_FLAVOR,
-            quark_phase=phase, Delta0=D0, Y_L_H=FN2_YL, R_values=_Rg_df,
-            switching_mode='step', Rx=None)
-        _df = np.ravel(eb.Delta_f)
-        if np.isfinite(_df).any():
-            out[k] = float(np.nanmedian(_df))
-    return out
-
-
-# panels (b,c,d): (ylabel, getter(itp), yscale, ylim) — from the stored tables
-_bcd = [
-    (r'$R^*$ [fm]',
-     lambda itp: np.array([itp['R_c'](nb, _YL, T) for nb, T in zip(nBc_seq, T_seq)]),
-     'linear', (0, 8)),
-    (r'$W^*/T$',
-     lambda itp: np.array([itp['W_c'](nb, _YL, T) for nb, T in zip(nBc_seq, T_seq)]) / T_seq,
-     'linear', (0, 1000)),
-    (r'$\log_{10}\,\tau$ [s]',
-     lambda itp: np.array([itp['log10_tau'](nb, _YL, T) for nb, T in zip(nBc_seq, T_seq)]),
-     'linear', None),
-]
-
-# ---- ONE figure for the selected parametrization (2×2: a=Δf, b=R*, c=W*/T, d=log10 τ) ----
-_tag     = q_tag_of(FN2_SET)
-_params  = get_alphabag_custom(alpha=FN2_SET['alpha'], B4=FN2_SET['B4'], m_s=FN2_SET['m_s'])
-_D0      = FN2_SET['Delta0']
-_T_CFL   = float(T_critical(_D0))                     # CFL undefined above this
-_sig_ref = int(FN2_SIGMAS[len(FN2_SIGMAS) // 2])      # σ fed to the bulk-Δf call (Δf σ-independent)
-
-# PRD size: mode='centered' (4.75" square). Change to 'single'/'double' to resize.
-# No sharex (new mode) — every panel carries its own x-axis + label.
-fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='centered', placeholder=False)
-_bcd_axes = [axB, axC, axD]
-
-# nearest table Y_L to FN2_YL (the getters read the interpolators at _YL)
-_a0 = next((nuc_sets[k] for k in nuc_sets
-            if k.endswith(f"_{_tag}_s{int(FN2_SIGMAS[0])}")), None)
-_YL = (float(_a0.hadronic_grids['Y_L_H'][
-           np.argmin(np.abs(_a0.hadronic_grids['Y_L_H'] - FN2_YL))])
-       if _a0 is not None else FN2_YL)
-
-# (a) the two σ-independent bulk driving forces: CFL (dashed) and unpaired (dotted)
-_df_cfl = _delta_f_bulk(_params, _D0, 'cfl', _sig_ref)
-_df_cfl[T_seq > _T_CFL] = np.nan                      # CFL gap vanishes above Tc
-_df_unp = _delta_f_bulk(_params, _D0, 'unpaired', _sig_ref)
-axA.plot(M_seq, _df_cfl, color='k', ls='--', lw=PHASE_LW['cfl'])
-axA.plot(M_seq, _df_unp, color='k', ls=':',  lw=PHASE_LW['unpaired'])
-axA.set_ylabel(r'$\Delta f$ [MeV/fm$^3$]')
-axA.axhline(0, color='0.6', lw=0.7, zorder=0)         # Δf<0 ⇒ quark phase favoured
-
-# (b,c,d) R*, W*/T, log10 τ vs M — colour = σ, line style = phase
-for sg in FN2_SIGMAS:
-    for ph, ls in _phase_ls:
-        stem = f"Htrapped_{FN2_FLAVOR}_{FN2_CHARGE}_{ph}_{_tag}_s{int(sg)}"
-        if stem not in nuc_sets:
-            continue
-        itp = build_thermal_nucleation_interpolators(nuc_sets[stem])
-        for ax, (_, getter, _sc, _yl) in zip(_bcd_axes, _bcd):
-            ax.plot(M_seq, getter(itp), color=_sig_col[sg], ls=ls, lw=PHASE_LW[ph])
-for ax, (ylab, _, sc, ylim) in zip(_bcd_axes, _bcd):
-    ax.set_ylabel(ylab); ax.set_yscale(sc)
-    if ylim is not None:
-        ax.set_ylim(*ylim)
-axD.axhline(np.log10(FN2_TAU), color='0.5', ls='--', lw=1.0)   # τ_target on (d)
-
-# common cosmetics: red vertical mass guides, xlim, panel label (NO gridlines)
-for _lab, ax in zip(('(a)', '(b)', '(c)', '(d)'), (axA, axB, axC, axD)):
-    ax.set_xlim(0.6, M_max)
-    for mv in FN2_MVERT:                       # dashed: fixed M_PNS
-        ax.axvline(mv, color=FN2_VGUIDE_COL, ls='--', lw=1.0, zorder=1)
-    for md in M_dot:                           # dotted: Mb-matched to cold
-        if np.isfinite(md):
-            ax.axvline(md, color=FN2_VGUIDE_COL, ls=':', lw=1.0, zorder=1)
-    panel_label(ax, _lab, corner='upper right')
-axC.set_xlabel(r'$M_{\rm PNS}\ [M_\odot]$'); axD.set_xlabel(r'$M_{\rm PNS}\ [M_\odot]$')
-
-# legends: phase (a) + σ (b).  The red vertical guides are explained in the caption.
-_ph = [Line2D([], [], color='k', ls=ls, label=lbl)
-       for lbl, ls in [('unpaired', ':'), ('CFL', '--'), ('unpCFL', '-')]]
-_sg = [Line2D([], [], color=_sig_col[sg], ls='-', label=rf'$\sigma={int(sg)}$')
-       for sg in FN2_SIGMAS]
-axA.legend(handles=_ph, loc='best', title='phase')
-axB.legend(handles=_sg, loc='best', title=r'$\sigma$ [MeV/fm$^2$]')
-
-fig.savefig(f'../output/figures/paper_fig7_Rstar_Wc_tau_{xsd_tag}_{_tag}.pdf',
-            bbox_inches='tight')
-plt.show()
-
-
-# %% [markdown]
-# ### Paper Figure 8 — $\sigma_{\rm crit}(B^{1/4},\Delta_0)$: iso-$\sigma_{\rm crit}$/-$M_{\max}$ + rejection + droplet-regime map
+# ### Paper Figure 5 — $\sigma_{\rm crit}(B^{1/4},\Delta_0)$: iso-$\sigma_{\rm crit}$/-$M_{\max}$ + rejection + droplet-regime map
 #
 # The saved IV.3 unpCFL grid ($\tau$=1 ms, $M_{T0}$=1.4 $M_\odot$), two $\alpha_s$
 # panels, combining several toggleable layers (see the `F8_*` flags at the top of
@@ -2284,20 +2211,20 @@ plt.show()
 
 # %%
 # ============================================================================
-#  Paper Fig 8: sigma_crit(B^1/4, Delta_0) for two alpha_s. Excluded regions are
+#  Paper Fig 5: sigma_crit(B^1/4, Delta_0) for two alpha_s. Excluded regions are
 #  drawn as coloured BOUNDARY outlines (not filled) + labels; the viable region
-#  carries the sigma_crit heatmap with iso-sigma_crit (black) and iso-M_max (white
+#  carries the sigma_crit heatmap with iso-sigma_crit (white) and iso-M_max (dark
 #  dashed) contour lines, and the R* droplet-regime zones. Regime via _regime_grid.
 # ============================================================================
 # ---- layer toggles: set any False to drop that layer -----------------------
-F8_SHOW          = [0, 1]     # which alpha_s panel indices to draw (pi/2 x 0.1, 0.3)
+F8_SHOW          = [0, 2]     # which alpha_s panel indices to draw (pi/2 x 0.1, 0.3)
 F8_HEATMAP       = True       # sigma_crit colour fill + colorbar
-F8_ISO_SIGMA     = True       # iso-sigma_crit contour lines (black)
-F8_ISO_MMAX      = True       # iso-M_max contour lines (white dashed)
+F8_ISO_SIGMA     = True       # iso-sigma_crit contour lines (white)
+F8_ISO_MMAX      = True       # iso-M_max contour lines (dark dashed)
 F8_REJECT        = True       # excluded-region boundary outlines
 F8_REJECT_LABELS = True       # labels on the excluded regions
-F8_REGIME        = True       # R* droplet-regime zone boundaries
-F8_REGIME_LABELS = True       # inline R_CFL / R_Delta / R_unp labels
+F8_REGIME        = False       # R* droplet-regime zone boundaries
+F8_REGIME_LABELS = False       # inline R_CFL / R_Delta / R_unp labels
 F8_UNP_STABLE    = False       # vertical line: B^1/4 where unpaired SQM turns abs. stable
 # ----------------------------------------------------------------------------
 set_paper_style()
@@ -2324,6 +2251,11 @@ _HSPEC = [(_RC['mmax'],        OKAB['vermillion'], r'$M_{\rm QS}^{\rm max}<2M_\o
 _REGCOL = [OKAB['orange'], OKAB['purple'], OKAB['sky']]           # codes 0, 1, 2
 _REGLAB = [r'$R_*=R^{\rm unp}_*$', r'$R_*=R_{\Delta}$', r'$R_*=R^{\rm CFL}_*$']     # codes 0, 1, 2
 _vmin8, _vmax8 = np.nanmin(_SIG8), np.nanmax(_SIG8[np.isfinite(_SIG8)])
+# Contour colours over viridis: only warm/magenta hues pop (blue/green/teal blend
+# into the map, orange clashes with the vermillion M<2 edge). iso-sigma = white;
+# iso-M = deep magenta. Alternatives to try: '#ff7fb0' (pink), STANDARD_COLORS['Brown'].
+_ISO_SIG_COL = 'white'
+_ISO_M_COL   = 'lightgray'                # mediumvioletred
 
 def _draw_reject(ax, ra, cpanel, labels=True):
     """Outline each excluded reason-zone (no fill) in its colour + inline label."""
@@ -2332,13 +2264,24 @@ def _draw_reject(ax, ra, cpanel, labels=True):
         if not _m.any():
             continue
         ax.contour(_B48, _D08, _m.astype(float), levels=[0.5], colors=[_col],
-                   linewidths=2.4, zorder=4)
+                   linewidths=1.8, zorder=4)
         if labels and not (_left_only and cpanel > 0):
             _r, _cc = np.where(_m)
-            ax.text(np.median(_B48[_cc]), np.median(_D08[_r]), _lab, color=_col,
-                    fontsize=(9.5 if _code == _RC['mmax'] else 8.5),   # M_QS^max label +1 pt
-                    fontweight='bold', ha='center', va='center',
-                    rotation=_rot, zorder=7)
+            _bc, _dc = np.median(_B48[_cc]), np.median(_D08[_r])
+            _fs = 9.5 if _code == _RC['mmax'] else 8.5      # all labels same size (M_QS^max +1)
+            if _code == _RC['rehadr']:
+                # re-hadr. zone is thin and sits under its own blue boundary -> pull
+                # the label into open space with an arrow back to the zone. Tweak the
+                # xytext (axes-fraction) anchor if it lands on another label.
+                ax.annotate(_lab, xy=(_bc, _dc), xycoords='data',
+                            xytext=(42, 0), textcoords='offset points',  # horizontal arrow (same y as zone); flip sign to point left
+                            color=_col, fontsize=_fs, fontweight='bold',
+                            ha='left', va='center', zorder=8,
+                            arrowprops=dict(arrowstyle='->', color=_col, lw=0.8,
+                                            mutation_scale=6, shrinkB=2))  # smaller arrowhead
+            else:
+                ax.text(_bc, _dc, _lab, color=_col, fontsize=_fs, fontweight='bold',
+                        ha='center', va='center', rotation=_rot, zorder=7)
 
 def _mu_unp_P0(alpha, B4):
     """mu_B of UNPAIRED beta-eq SQM at P=0, T=0 [MeV]. At P=0, mu_B == e/n_B, so
@@ -2363,9 +2306,9 @@ def _B_unp_absstable(alpha, lo, hi):
         return np.nan
     return brentq(f, lo, hi, xtol=0.05)
 
-# PRD size: mode='centered' (4.75" wide, 1×2). Change to 'single'/'double' to resize.
+# PRD size: mode='double' (4.75" wide, 1×2). Change to 'single'/'double' to resize.
 # paper_grid('1x2') is 2 columns → assumes len(F8_SHOW) == 2 (F8_SHOW = [0, 1]).
-fig, axes = paper_grid('1x2', mode='centered', placeholder=False)   # panels already square
+fig, axes = paper_grid('1x2', mode='double', placeholder=False)   # panels already square
 pcm = None
 for _c, _ia in enumerate(F8_SHOW):
     ax = axes[0, _c]
@@ -2374,11 +2317,6 @@ for _c, _ia in enumerate(F8_SHOW):
     if F8_HEATMAP:
         pcm = ax.pcolormesh(_B48, _D08, np.ma.masked_invalid(_sa), cmap='viridis',
                             vmin=_vmin8, vmax=_vmax8, shading='nearest', zorder=2)
-    # (2) iso-sigma_crit contour lines (black)
-    if F8_ISO_SIGMA:
-        _cs = ax.contour(_B48, _D08, _sa, levels=[50, 100, 150, 200, 250],
-                         colors='k', linewidths=0.7, alpha=0.6, zorder=3)
-        ax.clabel(_cs, fmt='%.0f', fontsize=11, inline=True)
     # (3) iso-M_max lines (white dashed, same label font as iso-sigma) on the
     #     mass-relevant cells (CFL-viable + the M<2 band); levels above 2 Msun --
     #     the 2 Msun edge itself is the vermillion M_max reject boundary.
@@ -2387,9 +2325,14 @@ for _c, _ia in enumerate(F8_SHOW):
         _lv = [round(x, 1) for x in np.arange(2.2, 4.001, 0.2)
                if np.isfinite(_mm).any() and np.nanmin(_mm) <= round(x, 1) <= np.nanmax(_mm)]
         if _lv:
-            _cm = ax.contour(_B48, _D08, _mm, levels=_lv, colors='white',
-                             linewidths=0.9, linestyles='--', alpha=0.9, zorder=3.5)
-            ax.clabel(_cm, fmt='%.1f', fontsize=11, inline=True)
+            _cm = ax.contour(_B48, _D08, _mm, levels=_lv, colors=[_ISO_M_COL],
+                             linewidths=0.9, linestyles='--', alpha=1.0, zorder=2.5)  # below iso-sigma (3)
+            ax.clabel(_cm, fmt='%.1f', fontsize=7.5, inline=True)
+    # (2) iso-sigma_crit contour lines (black)
+    if F8_ISO_SIGMA:
+        _cs = ax.contour(_B48, _D08, _sa, levels=[50, 100, 150, 200, 250],
+                         colors=[_ISO_SIG_COL], linewidths=0.8, alpha=0.9, zorder=3)
+        ax.clabel(_cs, fmt='%.0f', fontsize=9, inline=True)
     # (4) excluded-region boundary outlines + labels
     if F8_REJECT:
         _draw_reject(ax, _ra, _c, labels=F8_REJECT_LABELS)
@@ -2421,264 +2364,65 @@ for _c, _ia in enumerate(F8_SHOW):
     panel_label(ax, f"({chr(97 + _c)})")
     ax.set_ylabel(r'$\Delta_0$ [MeV]')          # y-axis on every panel (sharey off)
 if F8_HEATMAP and pcm is not None:
-    fig.colorbar(pcm, ax=axes.ravel().tolist(), label=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]',
-                 shrink=0.9)
-fig.savefig(f'../output/figures/sigcrit_map_isolines_{xsd_tag}.pdf', bbox_inches='tight')
+    # colorbar exactly as tall as the (square) panels: inset on the right panel at
+    # full axes height (set_box_aspect makes transAxes 0..1 span the square box).
+    _cax = axes[0, -1].inset_axes([1.05, 0.0, 0.05, 1.0])
+    fig.colorbar(pcm, cax=_cax, label=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]')
+fig.savefig(f'../output/figures/paper_fig5_sigcrit_map_isolines_{xsd_tag}.pdf', bbox_inches='tight')
 plt.show()
 
 
 # %% [markdown]
-# ### Paper Figure 9 — critical-droplet regime: $R_*=R_{\rm CFL}$ / $R_\Delta$ / $R_{\rm unp}$
+# ### Paper Figure 5a — $M$–$R$ and $P_{\rm CFL}(\mu_B)$ of the viable cells, coloured by $\sigma_{\rm crit}$
 #
-# At each accepted cell (finite $\sigma_{\rm crit}$) the unpCFL critical droplet
-# radius $R_*$ (the barrier peak) is one of three quantities: the CFL-branch radius
-# $R_{\rm CFL}$, the unpaired-branch radius $R_{\rm unp}$, or — pinned at the pairing
-# coherence kink — $R_\Delta = R_x(T) = \hbar c/\Delta(T)$. This maps which regime
-# wins over $(B^{1/4},\Delta_0)$ at $\tau$=1 ms, $M_{T0}$=1.4 $M_\odot$. The saved
-# grid stores only $\sigma_{\rm crit}$, so $R_*$ (and the pure-CFL/-unpaired radii)
-# are recomputed on demand at each cell's $\sigma_{\rm crit}$ via `critical_droplet_pt`.
+# Companion to Fig 5: for the $\alpha_s$ slices in `F8B_ALPHAS` (default [0,1,2]),
+# replay the cold CFL EoS + TOV of every $\sigma_{\rm crit}$-viable
+# $(B^{1/4},\Delta_0)$ cell and overlay **(a)** $M$–$R$ and **(b)**
+# $P_{\rm CFL}(\mu_B)$, each curve coloured by its $\sigma_{\rm crit}$ on the SAME
+# viridis scale as the Fig 5 heatmap. The hadronic reference (cold TOV /
+# $P_H(\mu_B)$) is black.
 
 # %%
 # ============================================================================
-#  Paper Fig 9: regime of the unpCFL critical droplet R* over (B^1/4, Delta_0),
-#  one panel per alpha_s. Recomputes R* + the pure-CFL/-unpaired radii + the
-#  crossover Rx at each cell's sigma_crit, and classifies R* by whichever radius
-#  it matches. Central (nBHc, T_c) of the MT0 star is fixed -> computed once.
-#  ponytail: 3 droplet solves/cell (unpCFL, cfl, unpaired); joblib over cells.
+#  Paper Fig 5a: M-R and P_CFL(mu_B) for the σ_crit-viable cells at α slices
+#  F8B_ALPHAS, coloured by σ_crit (SAME scale as the Fig 5 heatmap, _vmin8/_vmax8).
+#  Reuses nuc_an.replay_accepted (parallel CFL EoS + TOV). Hadronic curve = black.
+#  Needs the Fig 5 cell above to have run (_SIG8, _al8, _B48, _D08, _vmin8/_vmax8).
 # ============================================================================
-from matplotlib.colors import ListedColormap
-from matplotlib.patches import Patch
-
-_R9 = np.load(f'../output/mc_cfl/sigma_crit_grid_{xsd_tag}_MT0{MT0_grid_thr[0]:.2f}_'
-              f'saddlepoint-coulomb_minimize-unpCFL.npz', allow_pickle=False)
-_al, _B4, _D0, _SIG = _R9['alpha_slices'], _R9['B4_grid'], _R9['Delta0_grid'], _R9['sig_crit']
-_reg = _regime_grid(_SIG, _al, _B4, _D0, float(_R9['MT0']))   # all 3 panels (shared helper, IV.0)
-_NA = _SIG.shape[0]
-
-# ---- categorical map, one panel per alpha_s ---------------------------------
-# regime colours tied to the droplet-phase palette used elsewhere in the paper:
-#   R_unp -> unpaired orange, R_CFL -> CFL blue, R_Delta -> neutral purple (the kink).
 set_paper_style()
-_RCOL = ['#e08214', '#6a51a3', '#2c7fb8']                       # [unp, Delta, CFL] = codes 0,1,2
-_RLAB = [r'$R_*=R_{\rm unp}$', r'$R_*=R_\Delta$', r'$R_*=R_{\rm CFL}$']
-fig, axes = plt.subplots(1, _NA, figsize=(4.6 * _NA, 4.4), squeeze=False, sharey=True)
-for _ia in range(_NA):
-    ax = axes[0, _ia]
-    ax.pcolormesh(_B4, _D0, np.zeros_like(_reg[_ia], float),    # light-grey backdrop
-                  cmap=ListedColormap(['0.9']), shading='nearest')
-    ax.pcolormesh(_B4, _D0, np.ma.masked_less(_reg[_ia], 0),    # the 3 regimes on top
-                  cmap=ListedColormap(_RCOL), vmin=-0.5, vmax=2.5, shading='nearest')
-    for p in quark_param_sets:                                  # mark sets at this alpha
-        if abs(p['alpha'] - _al[_ia]) < 0.04:
-            ax.scatter([p['B4']], [p['Delta0']], s=110, marker='*',
-                       c='yellow', edgecolors='k', zorder=5)
-    ax.set_title(rf"$\alpha_s$={_al[_ia]:.2f}")
-    ax.set_xlabel(r'$B^{1/4}$ [MeV]')
-    ax.set_xlim(_B4.min(), _B4.max()); ax.set_ylim(_D0.min(), _D0.max())
-    panel_label(ax, f"({chr(97 + _ia)})")
-    if _ia == 0:
-        ax.set_ylabel(r'$\Delta_0$ [MeV]')
-axes[0, -1].legend(handles=[Patch(color=c, label=l) for c, l in zip(_RCOL, _RLAB)],
-                   loc='upper right', framealpha=0.9, fontsize=9)
-fig.suptitle(rf"unpCFL critical-droplet regime — $M_{{T0}}$={float(_R9['MT0']):.1f}$\,M_\odot$, "
-             rf"$\tau$={float(_R9['tau'])*1e3:g} ms, $Y_L$={YLH}, $S$={S} — {xsd_tag}", y=1.03)
-fig.tight_layout()
-fig.savefig(f'../output/figures/droplet_regime_map_{xsd_tag}.pdf', bbox_inches='tight')
-plt.show()
+F8B_ALPHAS     = [0, 1, 2]              # α_s slice indices to include (into _al8)
+F8B_MAX_CURVES = 300                    # even subsample of viable cells (None = all)
+# viable (finite-σ_crit) cells across the chosen α slices — same grid as Fig 5
+_al_idx  = [i for i in F8B_ALPHAS if i < len(_al8)]
+_f8b_curves = nuc_an.replay_accepted(_SIG8[_al_idx], _al8[_al_idx], _B48, _D08,
+                                     _filt_cfg, max_curves=F8B_MAX_CURVES,
+                                     n_jobs=scan_n_jobs)
+_norm8 = plt.Normalize(vmin=_vmin8, vmax=_vmax8)     # == Fig 5 heatmap colour scale
+_cmap8 = plt.cm.viridis
 
+fig, _axes = paper_grid('1x2', mode='double', placeholder=False)
+axMR, axP = _axes[0]                     # paper_grid axes are 2-D (1×2) → row 0
+# (a) M-R: hadronic reference (black) + 2 M_sun guide; CFL curves coloured by σ_crit
+axMR.plot(tov_cold[:, 3], tov_cold[:, 4], 'k-', lw=2, label='Hadronic (T=0)', zorder=5)
+axMR.axhline(2.0, color='0.5', ls=':', lw=1.0, zorder=1)
+for _c, _sc in _f8b_curves:
+    axMR.plot(_c['R'], _c['M'], color=_cmap8(_norm8(_sc)), lw=0.6, alpha=0.8)
+axMR.set_xlim(7, 16); axMR.set_ylim(0, 3.0)
+axMR.set_xlabel(r'$R$ [km]'); axMR.set_ylabel(r'$M$ [$M_\odot$]')
+axMR.legend(loc='lower right'); panel_label(axMR, '(a)')
+# (b) P_CFL(mu_B): hadronic P_H (black) + CFL curves coloured by σ_crit
+axP.plot(mu_B_H_sorted, P_H_sorted, 'k-', lw=2, label=r'$P_H\ (T\approx0)$', zorder=5)
+for _c, _sc in _f8b_curves:
+    axP.plot(_c['mu'], _c['P'], color=_cmap8(_norm8(_sc)), lw=0.6, alpha=0.8)
+axP.set_xlabel(r'$\mu_B$ [MeV]'); axP.set_ylabel(r'$P$ [MeV/fm$^3$]')
+axP.legend(loc='upper left'); panel_label(axP, '(b)')
+# colorbar as tall as the square right panel (same inset trick as Fig 5)
+_sm = plt.cm.ScalarMappable(norm=_norm8, cmap=_cmap8); _sm.set_array([])
+_cax8b = axP.inset_axes([1.05, 0.0, 0.05, 1.0])
+fig.colorbar(_sm, cax=_cax8b, label=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]')
 
-# %% [markdown]
-# ## IV.5 — Method comparison at fixed conditions
-#
-# Cross-method plots (saddle LCN / GCN / Coulomb-min + frozen LCN) built from
-# the loaded `nuc_sets` tables and the engine's per-point droplet solver.
-# Self-contained after Parts I + III + IV.0.
-
-# %%
-# =============================================================================
-#  Shared selectors for IV.5: parametrization, Y_L slice, table lookup.
-# =============================================================================
-# ---- user-configurable inputs ----------------------------------------------
-m5_set    = quark_param_sets[0]      # which (alpha, B4, Delta0, m_s) set
-m5_YL     = 0.25                     # lepton fraction (nearest grid value used)
-# -----------------------------------------------------------------------------
-m5_tag = q_tag_of(m5_set)
-_m5_ref = next(o for k, o in nuc_sets.items()
-               if k.endswith(f"_{m5_tag}_s{int(sigma_list[0])}"))
-m5_nBg = _m5_ref.hadronic_grids['n_B_H']
-m5_Tg  = _m5_ref.hadronic_grids['T']
-m5_iYL = int(np.argmin(np.abs(_m5_ref.hadronic_grids['Y_L_H'] - m5_YL)))
-m5_YL_used = _m5_ref.hadronic_grids['Y_L_H'][m5_iYL]
-
-def m5_get(flavor, charge, phase, sg):
-    """nuc_sets table for one (flavor, charge, phase, sigma) of the IV.5 set."""
-    return nuc_sets.get(f"Htrapped_{flavor}_{charge}_{phase}_{m5_tag}_s{int(sg)}")
-
-# (flavor, charge, colour, label) — the four methods, from the I.4 table
-# (single source; its per-method line style is unused here, σ sets the style).
-_M4 = [(fl, ch, c, lbl) for fl, ch, c, _ls, lbl in _methods]
-_M4_LS = ['-', '--']                       # line style per sigma
-print(f"IV.5 selectors: set {m5_tag}, Y_L≈{m5_YL_used:.2f}")
-
-
-# %% [markdown]
-# ### $W(R)$ across charge/flavor methods, 2 σ, one phase
-#
-# Barrier $W(R)$ at fixed $(T, n_B^H)$, one phase (`PW_PHASE`). **Colour =
-# method, line style = σ**; dot = critical point. frozen drawn only for the
-# unpaired phase. $W(R)$ recomputed with `compute_energy_barrier`.
-
-# %%
-# ============================================================================
-#  W(R) at fixed (T, n_B^H) — colour = charge/flavor method, line style = σ.
-# ============================================================================
-# ---- user-configurable inputs ----------------------------------------------
-PW_PHASE  = 'unpaired'                         # 'unpaired' | 'cfl' | 'unpCFL'
-PW_SIGMAS = [sigma_list[0], sigma_list[2]]     # two σ (line style)
-PW_T      = 30.0                               # fixed temperature [MeV]
-PW_NBH    = 3.0                                # fixed n_B^H / n_sat
-# ---- computation ------------------------------------------------------------
-_PW_par = get_alphabag_custom(alpha=m5_set['alpha'], B4=m5_set['B4'], m_s=m5_set['m_s'])
-_PW_D0  = m5_set['Delta0']
-_PW_Rx  = float(nuc_an.crossover_radius(PW_T, _PW_D0))   # unpCFL crossover radius
-_PW_Rg  = np.linspace(0.01, 14.0, 400)
-# ---- layout ------------------------------------------------------------------
-fig, ax = plt.subplots(figsize=(7, 5), constrained_layout=True)
-_wmax = 0.0
-for _fl, _ch, _col, _lbl in _M4:
-    if _fl == 'frozen' and PW_PHASE != 'unpaired':
-        continue
-    for _si, _sig in enumerate(PW_SIGMAS):
-        try:
-            _eb = compute_energy_barrier(
-                H['trapped'], PW_NBH * n_sat, PW_T, _sig,
-                electric_charge_mode=_ch, params=_PW_par, flavor_mode=_fl,
-                quark_phase=PW_PHASE, Delta0=_PW_D0, Y_L_H=m5_YL_used, R_values=_PW_Rg,
-                switching_mode='step', Rx=(_PW_Rx if PW_PHASE == 'unpCFL' else None))
-        except Exception:
-            continue                           # e.g. a (flavor,phase) combo not supported
-        ax.plot(_PW_Rg, _eb.W, color=_col, ls=_M4_LS[_si % len(_M4_LS)], lw=1.8)
-        if np.isfinite(_eb.W).any():
-            _k = int(np.nanargmax(_eb.W))
-            ax.plot(_PW_Rg[_k], _eb.W[_k], 'o', ms=6, color=_col, mfc='white', zorder=5)
-            _wmax = max(_wmax, float(_eb.W[_k]))
-if np.isfinite(_PW_Rx):
-    ax.axvspan(0, _PW_Rx, color='tab:blue', alpha=0.07, zorder=0)   # R <= R_x(T)
-ax.axhline(0, color='0.6', lw=0.7, zorder=0)
-ax.set_xlim(0, 8)
-if _wmax > 0:
-    ax.set_ylim(-0.15 * _wmax, 1.2 * _wmax)
-ax.set_xlabel(r'$R$ [fm]'); ax.set_ylabel(r'$W$ [MeV]')
-ax.set_title(rf"{PW_PHASE}, $T={PW_T:.0f}$ MeV, $n_B^H/n_\mathrm{{sat}}={PW_NBH:g}$, "
-             rf"$Y_L\approx{m5_YL_used:.2f}$ — {m5_tag}")
-_lg1 = ax.legend([Line2D([], [], color=_c, lw=2) for _, _, _c, _ in _M4],
-                 [_l for _, _, _, _l in _M4], loc='upper right', fontsize=8, title='method')
-ax.add_artist(_lg1)
-ax.legend([Line2D([], [], color='0.3', ls=_M4_LS[i]) for i in range(len(PW_SIGMAS))],
-          [rf'$\sigma={int(s)}$' for s in PW_SIGMAS], loc='center right', fontsize=8, title=r'$\sigma$')
-plt.show()
-
-
-# %% [markdown]
-# ### Critical-droplet observables vs σ at the τ=τ_target PNS core
-#
-# Fix the proto-NS isentrope $(Y_L, S)$. For each (σ, phase) the τ=τ_target
-# locus $T_{\rm nuc}(n_B^H)$ crosses that isentrope at one density — the PNS
-# core that *just* nucleates in τ_target. There the engine's
-# `critical_droplet_pt` gives the droplet, plotted **vs σ** (one line per
-# phase): $R^*$, $W^*/T$, $M_{\rm PNS}$, interior $n_B^{c*}$, baryon count
-# $N_B=n_B^{c*}\frac43\pi R^{*3}$, and $Y_S^H$ (hadronic strangeness fraction).
-
-# %%
-# =============================================================================
-#  Critical-droplet observables vs σ for {unpaired, CFL, unpCFL}; the barrier
-#  physics comes from nuc_an.critical_droplet_pt (same code as tau_pt).
-# =============================================================================
-# ---- user-configurable inputs ----------------------------------------------
-_D7_flavor, _D7_charge = 'saddlepoint', 'coulomb_minimize'
-_D7_methods = [('unpaired', 'tab:orange', '--', 'unpaired'),   # (phase, colour, ls, label)
-               ('cfl',      'tab:green',  '-.', 'CFL'),
-               ('unpCFL',   'tab:blue',   '-',  'unpCFL')]
-_D7_YL = m5_YL_used                    # PNS lepton fraction (grid value)
-_D7_S  = 2.0                           # PNS isentrope
-# ---- computation ------------------------------------------------------------
-_D7_par = get_alphabag_custom(alpha=m5_set['alpha'], B4=m5_set['B4'], m_s=m5_set['m_s'])
-_D7_D0  = m5_set['Delta0']
-
-# S-isentrope T(n_B) and the central-density -> M_PNS map (stable branch).
-_D7_iso = lambda nB: np.asarray(H['iso_trapped']['T'](nB, _D7_YL, _D7_S))
-_pns_full = tov_trapped[min(tov_trapped, key=lambda k:           # nearest (Y_L, S)
-                            abs(k[0] - _D7_YL) + abs(k[1] - _D7_S))]  # cols: 2=n_Bc, 4=M
-_pns = _pns_full[:int(np.argmax(_pns_full[:, 4])) + 1]           # stable branch
-_M_of_nBc = lambda nB: float(np.interp(nB, _pns[:, 2], _pns[:, 4]))
-
-
-def _s2_crossing(nB, Tn):
-    """n_B where the τ-locus T_nuc(n_B) meets the isentrope (first sign change);
-    that density is 'on the isentrope, τ=tau_target' — the core that just nucleates."""
-    m = np.isfinite(nB) & np.isfinite(Tn)
-    if m.sum() < 2:
-        return np.nan
-    x, d = nB[m], Tn[m] - _D7_iso(nB[m])
-    s = np.where(np.diff(np.sign(d)) != 0)[0]
-    if s.size == 0:
-        return np.nan
-    i = s[0]
-    return float(x[i] - d[i] * (x[i + 1] - x[i]) / (d[i + 1] - d[i]))   # linear root
-
-
-def _crossing_observables(sigma, phase):
-    """One point per (σ, phase): on the (Y_L, S) isentrope, the density where
-    τ=tau_target; return its critical-droplet observables (or None)."""
-    obs = m5_get(_D7_flavor, _D7_charge, phase, sigma)
-    if obs is None:
-        return None
-    res = compute_nucleation_density(obs, tau_target=tau_target, scan='n_B')
-    nBx = _s2_crossing(*nucleation_curve(res, m5_iYL))    # τ-locus ∩ isentrope
-    if not np.isfinite(nBx):
-        return None
-    Tx = float(_D7_iso(np.array([nBx]))[0])   # isentrope T there (= T_nuc at crossing)
-    H_pt = nuc_an.hadronic_point(H['trapped'], nBx, _D7_YL, Tx)
-    R_c, W_c, Qs = nuc_an.critical_droplet_pt(
-        sigma, H_pt, Tx, _D7_flavor, _D7_charge, phase, {}, _D7_par, _D7_D0, _nuc_cfg)
-    if Qs is None or not (np.isfinite(R_c) and R_c > 0 and np.isfinite(W_c)):
-        return None
-    nBc = float(Qs.n_B)
-    NB = nBc * (4.0 / 3.0) * np.pi * R_c ** 3   # baryons in a sharp droplet of radius R*
-    return dict(Rstar=R_c, WoverT=W_c / Tx, Mpns=_M_of_nBc(nBx),
-                nBc=nBc, NB=NB, YSH=float(H_pt.Y_S))
-
-
-# One crossing point per (σ, phase).
-_D7 = {ph: {k: np.full(len(sigma_list), np.nan) for k in
-            ('Rstar', 'WoverT', 'Mpns', 'nBc', 'NB', 'YSH')}
-       for ph, _, _, _ in _D7_methods}
-for _ph, _, _, _ in _D7_methods:
-    for _i, _sig in enumerate(sigma_list):
-        _o = _crossing_observables(_sig, _ph)
-        if _o is not None:
-            for _k in _D7[_ph]:
-                _D7[_ph][_k][_i] = _o[_k]
-    print(f"  {_ph:<8}: {int(np.sum(np.isfinite(_D7[_ph]['Rstar'])))}/{len(sigma_list)} σ-points",
-          flush=True)
-
-# ---- layout: 6 panels vs σ, one line per phase --------------------------------
-_D7_panels = [('Rstar', r'$R^*$ [fm]'), ('WoverT', r'$W^*/T$'),
-              ('Mpns', r'$M_{\rm PNS}$ [$M_\odot$]'), ('nBc', r'$n_B^{c*}$ [fm$^{-3}$]'),
-              ('NB', r'$N_B$'), ('YSH', r'$Y_S^H$')]
-_sig_arr = np.asarray(sigma_list, float)
-fig, axs = plt.subplots(2, 3, figsize=(15, 9), sharex=True, constrained_layout=True)
-for _ph, _c, _ls, _lbl in _D7_methods:
-    for _ax, (_key, _ylab) in zip(axs.flat, _D7_panels):
-        _ax.plot(_sig_arr, _D7[_ph][_key], color=_c, ls=_ls, lw=1.6,
-                 marker='o', ms=5, label=_lbl)
-for _ax, (_key, _ylab) in zip(axs.flat, _D7_panels):
-    _ax.set_ylabel(_ylab); _ax.grid(alpha=0.3)
-for _ax in axs[-1]:
-    _ax.set_xlabel(r'$\sigma$ [MeV/fm$^2$]')
-axs.flat[0].legend(fontsize=9)
-fig.suptitle(rf"critical droplet at τ={tau_target*1e3:g} ms on the $S={_D7_S:g}$, "
-             rf"$Y_L={_D7_YL:.2f}$ PNS isentrope — {_D7_flavor}/{_D7_charge}, {m5_tag}", y=1.04)
+fig.savefig(f'../output/figures/paper_fig5a_MR_PmuB_sigmacrit_{xsd_tag}.pdf',
+            bbox_inches='tight')
 plt.show()
 
 
@@ -2761,10 +2505,10 @@ fig.colorbar(pcm, ax=ax, label=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]')
 fig.tight_layout(); plt.show()
 
 # %% [markdown]
-# ### UNPAIRED $\sigma_{\rm crit}(B^{1/4},\alpha_s)$ — three $m_s$ panels (full Fig. 8 layers)
+# ### UNPAIRED $\sigma_{\rm crit}(B^{1/4},\alpha_s)$ — three $m_s$ panels (full Fig. 5 layers)
 #
 # Same unpaired heatmap as above, one panel per strange-quark mass, carrying the
-# same toggleable layers as Paper Fig. 8 — but every quantity is the **unpaired
+# same toggleable layers as Paper Fig. 5 — but every quantity is the **unpaired
 # $\beta$-eq quark EoS**, never CFL (no $\Delta_0$, no pairing):
 # - **heatmap + iso-$\sigma_{\rm crit}$** — $\sigma_{\rm crit}$ fill with black
 #   iso-lines (50–250 MeV/fm²);
@@ -2883,7 +2627,7 @@ fig, axes = plt.subplots(1, len(U3_MS_LIST), figsize=(5.25 * len(U3_MS_LIST), 4.
                          squeeze=False, constrained_layout=True)
 pcm = None
 for _c, (_ms, (_sig, _ok, _mm, _rs)) in enumerate(zip(U3_MS_LIST, _u3)):
-    ax = axes[0, _c]; ax.set_box_aspect(1)               # square panels, like Fig 8
+    ax = axes[0, _c]; ax.set_box_aspect(1)               # square panels, like Fig 5
     # Witten line B(alpha), per m_s (needed for both the window mask and its drawing).
     _Bw = (np.array([_B_at_930(lambda a, b: _ea_unp_P0(a, b, _ms), al, _lo3, _hi3)
                      for al in _stab_al]) if (U3_WITTEN or U3_WINDOW_ONLY) else None)
@@ -3039,3 +2783,447 @@ ax.set_title(rf"Charge prescriptions, $T={SC_T:.0f}$ MeV, "
              rf"MeV/fm$^2$, $\lambda_D={_eb_scr.lambda_D:.1f}$ fm — {m5_tag}")
 ax.legend(loc='upper right', fontsize=8)
 plt.show()
+
+
+# %% [markdown]
+# ## Study — does $W(R)$ develop a minimum at large $R$?
+#
+# The thin-wall barrier $W(R)$ rises to the critical radius $R_*$ then, for a
+# genuine first-order transition, falls as the bulk term ($\propto -R^3\Delta f$)
+# takes over. With the Coulomb / Debye-screening charge terms a SECOND rise at
+# large $R$ could in principle create a local **minimum** (a metastable finite
+# droplet / frustrated phase). Here we push $R$ out to `WR_RMAX` fm and check: is
+# there a turnover, or is $W$ monotone past $R_*$? `gcn_coulomb` is excluded (its
+# unscreened $\propto R^5$ term blows up and is unphysical at large $R$).
+
+# %%
+# ============================================================================
+#  W(R) to very large R for coulomb_minimize / screening; flag any local minimum
+#  beyond the barrier peak. Reuses compute_energy_barrier (nucleation.critical).
+# ============================================================================
+set_paper_style()
+WR_T      = 20.0                 # temperature [MeV]
+WR_NBH    = 5.0                  # n_B^H / n_sat
+WR_SIG    = 30.0                 # surface tension [MeV/fm^2]
+WR_YL     = PNS_TMAX['YLH']      # lepton fraction (Y_L^H at t_Tmax = 0.25)
+WR_SET    = quark_param_sets[0]  # quark parametrization
+WR_PHASE  = 'unpaired'           # 'unpaired' | 'cfl' | 'unpCFL'
+WR_RMAX   = 100.0                # fm — push R far out to expose any turnover
+WR_N      = 1200
+WR_MODES  = [('coulomb_minimize', STANDARD_COLORS['Blue']),
+             ('screening',        STANDARD_COLORS['Orange'])]
+_wr_par = get_alphabag_custom(alpha=WR_SET['alpha'], B4=WR_SET['B4'], m_s=WR_SET['m_s'])
+_wr_Rg  = np.linspace(0.02, WR_RMAX, WR_N)
+
+fig, (axF, axZ) = plt.subplots(1, 2, figsize=(7.0, 3.0), constrained_layout=True)
+for _ch, _col in WR_MODES:
+    _eb = compute_energy_barrier(
+        H['trapped'], WR_NBH * n_sat, WR_T, WR_SIG, electric_charge_mode=_ch,
+        params=_wr_par, flavor_mode='saddlepoint', quark_phase=WR_PHASE,
+        Delta0=WR_SET['Delta0'], Y_L_H=WR_YL, R_values=_wr_Rg)
+    _W = np.asarray(_eb.W, float)
+    axF.plot(_wr_Rg, _W, color=_col, lw=1.6, label=_ch)
+    axZ.plot(_wr_Rg, _W, color=_col, lw=1.6, label=_ch)
+    if np.isfinite(_W).any():                       # barrier peak + any later local min
+        _pk = int(np.nanargmax(_W))
+        _mn = _pk + int(np.nanargmin(_W[_pk:]))
+        _has_min = (_pk < _mn < len(_W) - 1 and _W[_mn] < _W[_pk]
+                    and _W[-1] > _W[_mn] + 1e-6)     # dips then rises again => true minimum
+        axF.plot(_wr_Rg[_pk], _W[_pk], 'o', ms=5, color=_col, mfc='white', zorder=5)
+        if _has_min:
+            axF.plot(_wr_Rg[_mn], _W[_mn], 's', ms=6, color=_col, zorder=6)
+        print(f"{_ch:>18}: R_*={_wr_Rg[_pk]:.2f} fm, W_*={_W[_pk]:.1f} MeV;  "
+              f"large-R minimum: {('YES @ R=%.1f fm' % _wr_Rg[_mn]) if _has_min else 'no (monotone past R_*)'}")
+axF.axhline(0, color='0.6', lw=0.7, zorder=0)
+axF.set_xlabel(r'$R$ [fm]'); axF.set_ylabel(r'$W$ [MeV]')
+axF.set_title(rf'full range (to {WR_RMAX:g} fm)'); axF.legend(fontsize=8)
+axZ.axhline(0, color='0.6', lw=0.7, zorder=0)
+axZ.set_xlim(0, 12); axZ.set_xlabel(r'$R$ [fm]'); axZ.set_ylabel(r'$W$ [MeV]')
+axZ.set_title('zoom near the barrier')
+fig.suptitle(rf"$W(R)$ large-$R$ check — {WR_PHASE}, $T={WR_T:.0f}$ MeV, "
+             rf"$n_B^H/n_0={WR_NBH:g}$, $\sigma={WR_SIG:.0f}$ — {q_tag_of(WR_SET)}", y=1.04)
+plt.show()
+
+
+# %% [markdown]
+# ## Study — critical-droplet observables at nucleation (τ = 1 s)
+#
+# Typical values of $R_*$, $W_*/T$, $N_B^{Q*}=\tfrac43\pi R_*^3\,n_B^{Q*}$ (quark
+# interior baryon number of the critical droplet) and $Y_S^H$, evaluated where the
+# central nucleation time is $\tau=1$ s. **Plot 1** — along the $\tau=1$ s curve
+# $T_{\rm nuc}(n_B^H)$ at fixed $(Y_L^H,\sigma)$ for one quark set: observables vs
+# $n_B^H$, colour = $\sigma$. Goal: read off the generic magnitude/scaling of the
+# droplet at the moment it nucleates.
+
+# %%
+# ============================================================================
+#  Study helper + Plot 1. _droplet_obs: critical-droplet observables at one
+#  hadronic point (reused by Plots 2a/2b). Plot 1: vs n_B^H along the tau=1 s
+#  curve T_nuc(n_B^H) (compute_nucleation_density) at fixed (Y_L^H, sigma).
+# ============================================================================
+from dataclasses import replace as _dc_replace
+set_paper_style()
+
+
+def _droplet_obs(sigma, H_pt, T, flavor, charge, phase, params, Delta0, nuc, cache=None):
+    """Critical-droplet observables at one hadronic point:
+      R_* [fm], W_*/T, N_B^{Q*}=(4/3)π R_*³·n_B^{Q*} (QUARK interior density), Y_S^H.
+    NaN where the droplet solve fails or the hadronic phase is stable (W_*=inf)."""
+    R_c, W_c, Qs = nuc_an.critical_droplet_pt(
+        sigma, H_pt, T, flavor, charge, phase,
+        {} if cache is None else cache, params, Delta0, nuc)
+    _YS = float(getattr(H_pt, 'Y_S', np.nan))
+    if Qs is None or not (np.isfinite(R_c) and R_c > 0 and np.isfinite(W_c) and W_c > 0):
+        return dict(R=np.nan, WoverT=np.nan, NB=np.nan, YS=_YS)
+    return dict(R=float(R_c), WoverT=float(W_c) / float(T),
+                NB=4.0 / 3.0 * np.pi * R_c**3 * float(Qs.n_B), YS=_YS)
+
+
+SP1_SET     = quark_param_sets[0]                    # one quark parametrization
+SP1_YLH     = PNS_TMAX['YLH']                        # Y_L^H (0.25 = t_Tmax)
+SP1_PHASE   = 'unpCFL'                               # 'unpaired' | 'cfl' | 'unpCFL'
+SP1_FLAVOR, SP1_CHARGE = 'saddlepoint', 'coulomb_minimize'
+SP1_SIGMAS  = [50.0, 100.0, 200.0]                   # colour = sigma
+_nuc1s = _dc_replace(_nuc_cfg, tau_target=1.0)       # tau = 1 s
+_tag1  = q_tag_of(SP1_SET)
+_par1  = get_alphabag_custom(alpha=SP1_SET['alpha'], B4=SP1_SET['B4'], m_s=SP1_SET['m_s'])
+_D01   = SP1_SET['Delta0']
+_col1  = {sg: mpl.cm.viridis(t) for sg, t in
+          zip(SP1_SIGMAS, np.linspace(0.15, 0.85, len(SP1_SIGMAS)))}
+
+fig, ((axR, axW), (axN, axY)) = paper_grid('2x2', mode='double', placeholder=False)
+_P1 = [(axR, 'R', r'$R_*$ [fm]', 'linear'), (axW, 'WoverT', r'$W_*/T$', 'log'),
+       (axN, 'NB', r'$N_B^{Q*}$', 'log'), (axY, 'YS', r'$Y_S^H$', 'linear')]
+for sg in SP1_SIGMAS:
+    stem = f"Htrapped_{SP1_FLAVOR}_{SP1_CHARGE}_{SP1_PHASE}_{_tag1}_s{int(sg)}"
+    if stem not in nuc_sets:
+        print(f"Plot 1 skip σ={sg:g}: {stem} not in nuc_sets"); continue
+    _obs = nuc_sets[stem]
+    _iYL = int(np.argmin(np.abs(_obs.hadronic_grids['Y_L_H'] - SP1_YLH)))
+    _YLg = float(_obs.hadronic_grids['Y_L_H'][_iYL])
+    res  = compute_nucleation_density(_obs, tau_target=1.0, scan='n_B')   # tau=1 s locus
+    nBc_, Tc_ = nucleation_curve(res, _iYL)
+    _cache, _rows = {}, []
+    for nb, T in zip(nBc_, Tc_):
+        if not (np.isfinite(nb) and np.isfinite(T)):
+            _rows.append(dict(R=np.nan, WoverT=np.nan, NB=np.nan, YS=np.nan)); continue
+        H_pt = nuc_an.hadronic_point(H['trapped'], nb, _YLg, T)
+        _rows.append(_droplet_obs(sg, H_pt, T, SP1_FLAVOR, SP1_CHARGE, SP1_PHASE,
+                                  _par1, _D01, _nuc1s, _cache))
+    _x = np.asarray(nBc_, float) / n_sat
+    for ax, key, _, _sc in _P1:
+        ax.plot(_x, [r[key] for r in _rows], color=_col1[sg], lw=1.6,
+                label=rf'$\sigma={int(sg)}$')
+for ax, key, ylab, sc in _P1:
+    ax.set_ylabel(ylab); ax.set_yscale(sc); ax.set_xlabel(r'$n_B^H/n_0$')
+axR.legend(fontsize=8, title=r'$\sigma$ [MeV/fm$^2$]')
+for _lab, ax in zip('abcd', (axR, axW, axN, axY)):
+    panel_label(ax, f'({_lab})')
+fig.suptitle(rf"Droplet observables along $\tau=1$ s — {SP1_PHASE}, "
+             rf"$Y_L^H={SP1_YLH:g}$ — {_tag1}", y=1.02)
+fig.savefig(f'../output/figures/study_droplet_vs_nBH_tau1s_{xsd_tag}_{_tag1}.pdf',
+            bbox_inches='tight')
+plt.show()
+
+
+# %% [markdown]
+# **Plot 2a** — scatter over ALL $\sigma_{\rm crit}$-viable Fig-5 cells
+# $(B^{1/4},\Delta_0,\alpha_s)$ at $M_{T0}=1.4$: each observable vs the cell's
+# $\sigma_{\rm crit}$, colour = $\alpha_s$. The central state is quark-independent
+# (same $H_{\rm pt}$ for every cell); only the droplet solve uses the cell's
+# $(\alpha_s,B^{1/4},\Delta_0)$. Reveals global trends across the accepted space.
+
+# %%
+# ============================================================================
+#  Study Plot 2a: droplet observables vs sigma_crit, one point per viable Fig-5
+#  cell. Needs the Fig 5 cell to have run (_SIG8, _al8, _B48, _D08).
+# ============================================================================
+set_paper_style()
+SP2_MT0    = 1.4
+SP2_PHASE  = 'unpCFL'
+SP2_FLAVOR, SP2_CHARGE = 'saddlepoint', 'coulomb_minimize'
+SP2_MS     = m_s_fixed
+SP2_MAX    = 400                        # cap #cells (even subsample); None = all
+_nBHc2, _Tc2, _Hpt2 = nuc_an.central_state(SP2_MT0, _star)   # quark-independent centre
+_cells = [(_al8[ia], _B48[j], _D08[i], float(_SIG8[ia, i, j]))
+          for ia in range(len(_al8)) for i in range(len(_D08)) for j in range(len(_B48))
+          if np.isfinite(_SIG8[ia, i, j])]
+if SP2_MAX and len(_cells) > SP2_MAX:
+    _cells = _cells[::int(np.ceil(len(_cells) / SP2_MAX))]
+_al_arr = np.array([c[0] for c in _cells]) / (np.pi / 2)
+_sc_arr = np.array([c[3] for c in _cells])
+_rows2 = [_droplet_obs(sc, _Hpt2, _Tc2, SP2_FLAVOR, SP2_CHARGE, SP2_PHASE,
+                       get_alphabag_custom(alpha=al, B4=B4, m_s=SP2_MS), D0, _nuc_cfg)
+          for al, B4, D0, sc in _cells]
+print(f"Plot 2a: {len(_cells)} viable cells")
+
+fig, ((axR, axW), (axN, axY)) = paper_grid('2x2', mode='double', placeholder=False)
+_P2 = [(axR, 'R', r'$R_*$ [fm]', 'linear'), (axW, 'WoverT', r'$W_*/T$', 'log'),
+       (axN, 'NB', r'$N_B^{Q*}$', 'log'), (axY, 'YS', r'$Y_S^H$', 'linear')]
+_sm2 = None
+for ax, key, ylab, sc in _P2:
+    _sm2 = ax.scatter(_sc_arr, np.array([r[key] for r in _rows2]), c=_al_arr,
+                      s=14, cmap='plasma', alpha=0.8,
+                      vmin=_al_arr.min(), vmax=_al_arr.max())
+    ax.set_ylabel(ylab); ax.set_yscale(sc); ax.set_xlabel(r'$\sigma_{\rm crit}$ [MeV/fm$^2$]')
+for _lab, ax in zip('abcd', (axR, axW, axN, axY)):
+    panel_label(ax, f'({_lab})')
+fig.colorbar(_sm2, ax=[axR, axW, axN, axY], label=r'$\alpha_s\,/\,(\pi/2)$', shrink=0.6)
+fig.suptitle(rf"Droplet vs $\sigma_{{\rm crit}}$ over viable cells — "
+             rf"$M_{{T0}}={SP2_MT0:g}\,M_\odot$, {SP2_PHASE}", y=1.02)
+fig.savefig(f'../output/figures/study_droplet_vs_sigmacrit_scatter_{xsd_tag}.pdf',
+            bbox_inches='tight')
+plt.show()
+
+
+# %% [markdown]
+# **Plot 2b** — vs $M_{\rm PNS}$ (colour = $\sigma$) for one quark set: the four
+# observables along the $t_{T\rm max}$ central sequence (extends Fig 3 to
+# $N_B^{Q*}$ and $Y_S^H$). Fixed $\sigma$ values, so $\tau$ varies along each curve.
+
+# %%
+# ============================================================================
+#  Study Plot 2b: droplet observables vs M_PNS, colour = sigma, one quark set.
+# ============================================================================
+set_paper_style()
+SP2B_SET   = quark_param_sets[0]
+SP2B_PHASE = 'unpCFL'
+SP2B_FLAVOR, SP2B_CHARGE = 'saddlepoint', 'coulomb_minimize'
+SP2B_SIGMAS = [50.0, 100.0, 200.0]
+_yl2, _s2 = PNS_TMAX['YLH'], PNS_TMAX['S']
+_tov2 = tov_trapped[min(tov_trapped, key=lambda k: abs(k[0] - _yl2) + abs(k[1] - _s2))]
+_i2 = np.argmax(_tov2[:, 4]) + 1
+_m2 = _tov2[:_i2, 4] >= 0.6
+_Ms, _nBs = _tov2[:_i2, 4][_m2], _tov2[:_i2, 2][_m2]
+_Ts = np.asarray(H['iso_trapped']['T'](_nBs, _yl2, _s2))
+_par2b = get_alphabag_custom(alpha=SP2B_SET['alpha'], B4=SP2B_SET['B4'], m_s=SP2B_SET['m_s'])
+_D02b = SP2B_SET['Delta0']
+_col2b = {sg: mpl.cm.viridis(t) for sg, t in
+          zip(SP2B_SIGMAS, np.linspace(0.15, 0.85, len(SP2B_SIGMAS)))}
+
+fig, ((axR, axW), (axN, axY)) = paper_grid('2x2', mode='double', placeholder=False)
+_P2b = [(axR, 'R', r'$R_*$ [fm]', 'linear'), (axW, 'WoverT', r'$W_*/T$', 'log'),
+        (axN, 'NB', r'$N_B^{Q*}$', 'log'), (axY, 'YS', r'$Y_S^H$', 'linear')]
+for sg in SP2B_SIGMAS:
+    _cache, _rows = {}, []
+    for nb, T in zip(_nBs, _Ts):
+        H_pt = nuc_an.hadronic_point(H['trapped'], nb, _yl2, T)
+        _rows.append(_droplet_obs(sg, H_pt, T, SP2B_FLAVOR, SP2B_CHARGE, SP2B_PHASE,
+                                  _par2b, _D02b, _nuc_cfg, _cache))
+    for ax, key, _, _sc in _P2b:
+        ax.plot(_Ms, [r[key] for r in _rows], color=_col2b[sg], lw=1.6,
+                label=rf'$\sigma={int(sg)}$')
+for ax, key, ylab, sc in _P2b:
+    ax.set_ylabel(ylab); ax.set_yscale(sc); ax.set_xlabel(r'$M_{\rm PNS}\ [M_\odot]$')
+axR.legend(fontsize=8, title=r'$\sigma$ [MeV/fm$^2$]')
+for _lab, ax in zip('abcd', (axR, axW, axN, axY)):
+    panel_label(ax, f'({_lab})')
+fig.suptitle(rf"Droplet vs $M_{{\rm PNS}}$ — {SP2B_PHASE}, {q_tag_of(SP2B_SET)}", y=1.02)
+fig.savefig(f'../output/figures/study_droplet_vs_MPNS_{xsd_tag}_{q_tag_of(SP2B_SET)}.pdf',
+            bbox_inches='tight')
+plt.show()
+
+
+# %% [markdown]
+# ## Table — PNS evolution outcomes (NS / QS, conversion energy)
+#
+# For each (quark parametrization, σ) and an initial PNS gravitational mass at
+# $t_0$ $(Y_L^H=0.35,\,S_H=1.5)$, follow the fixed-baryon-mass evolution:
+# **t_0** columns $M^{\rm PNS}, M_B, n_{B,c}^H, Y_{S,c}^H$; **t_Tmax**
+# $(Y_L^H=0.25,\,S_H=2.0)$ columns $M^{\rm PNS}, n_{B,c}^H, Y_{S,c}^H$; **remnant**
+# type / mass / conversion energy. Decision: at each snapshot compute
+# $\sigma_{\rm crit}$ (τ=`TAB_TAU`) at the centre; **σ<σ_crit ⇒ nucleates**. Converts
+# at $t_0$ if σ<σ_crit(t_0), else at $t_Tmax$ if σ<σ_crit(t_Tmax), else stays NS.
+# Conversion energy $E_{\rm conv}=(M^{\rm PNS}_{\rm convert}-M_{\rm QS})c^2$ at fixed
+# $M_B$ (QS remnant from the row's own CFL EoS). Generalises the old fixed-σ table.
+
+# %%
+# ============================================================================
+#  Outcomes table. New physics vs the rest of the notebook: (i) the nucleate-or-not
+#  decision branch, (ii) M_QS(M_B) baryon-conserving remnant, (iii) E_conv. All
+#  assumptions are flagged inline for validation against the old table.
+# ============================================================================
+M_SUN_C2_ERG = 1.7827e54                 # M_sun c^2 [erg]  (new constant)
+TAB_SETS     = quark_param_sets          # rows: quark parametrizations
+TAB_SIGMAS   = [30.0]                    # and sigmas [MeV/fm^2]
+TAB_MPNS_T0  = [1.4, 1.6]                # initial PNS grav mass at t_0 [M_sun]
+TAB_TAU      = 1e-3                       # s — nucleation-criterion tau for the decision
+TAB_FLAVOR, TAB_CHARGE, TAB_PHASE = 'saddlepoint', 'coulomb_minimize', 'unpCFL'
+_tab_nuc = _dc_replace(_nuc_cfg, tau_target=TAB_TAU)
+_t0key = min(tov_trapped, key=lambda k: abs(k[0] - 0.35) + abs(k[1] - 1.5))
+_tTkey = min(tov_trapped, key=lambda k: abs(k[0] - 0.25) + abs(k[1] - 2.0))
+_tov0, _tovT = tov_trapped[_t0key], tov_trapped[_tTkey]
+
+_mqs_cache = {}
+def _M_QS_of_Mb(pset):                   # baryon-conserving QS remnant mass M(M_B)
+    k = (pset['alpha'], pset['B4'], pset['Delta0'], pset['m_s'])
+    if k not in _mqs_cache:
+        _mqs_cache[k] = _binterp(_cold_cfl_stable(pset)[0], 5, 4)   # cols 5=Mb -> 4=M
+    return _mqs_cache[k]
+
+def _nucleates(sc, sigma):               # sigma<sigma_crit => nucleates; +inf => always
+    return bool(np.isposinf(sc) or (np.isfinite(sc) and sigma < sc))
+
+def _sigma_crit_at(nBc, YL, S, Tc, params, D0):
+    if not (np.isfinite(nBc) and np.isfinite(Tc)):
+        return np.nan
+    Hpt = nuc_an.hadronic_point(H['trapped'], nBc, YL, Tc)
+    return nuc_an.sigma_target_pt(Hpt, Tc, TAB_FLAVOR, TAB_CHARGE, TAB_PHASE,
+                                  params, D0, _tab_nuc)
+
+_rows = []
+for pset in TAB_SETS:
+    params = get_alphabag_custom(alpha=pset['alpha'], B4=pset['B4'], m_s=pset['m_s'])
+    D0 = pset['Delta0']
+    for sigma in TAB_SIGMAS:
+        for MpnsT0 in TAB_MPNS_T0:
+            # --- t_0 (fixed M_B thereafter) ---
+            Mb   = float(_binterp(_tov0, 4, 5)(MpnsT0))     # M -> Mb
+            nBc0 = float(_binterp(_tov0, 4, 2)(MpnsT0))     # M -> n_Bc
+            Tc0  = float(H['iso_trapped']['T'](nBc0, 0.35, 1.5))
+            YS0  = float(H['trapped']['Y_S'](nBc0, 0.35, Tc0))
+            # --- t_Tmax at fixed M_B (NaN if beyond that branch's max) ---
+            MpnsT = float(_binterp(_tovT, 5, 4)(Mb))        # Mb -> M
+            nBcT  = float(_binterp(_tovT, 5, 2)(Mb))        # Mb -> n_Bc
+            TcT   = float(H['iso_trapped']['T'](nBcT, 0.25, 2.0)) if np.isfinite(nBcT) else np.nan
+            YST   = float(H['trapped']['Y_S'](nBcT, 0.25, TcT)) if np.isfinite(nBcT) else np.nan
+            # --- decision: sigma_crit at each snapshot, pick outcome ---
+            sc0 = _sigma_crit_at(nBc0, 0.35, 1.5, Tc0, params, D0)
+            scT = _sigma_crit_at(nBcT, 0.25, 2.0, TcT, params, D0)
+            if _nucleates(sc0, sigma):
+                typ, Mconv = 'QS', MpnsT0
+            elif _nucleates(scT, sigma):
+                typ, Mconv = 'QS', MpnsT
+            else:
+                typ, Mconv = 'NS', np.nan
+            if typ == 'QS':
+                Mqs   = float(_M_QS_of_Mb(pset)(Mb))
+                Mrem  = Mqs
+                Econv = (Mconv - Mqs) * M_SUN_C2_ERG / 1e53 if np.isfinite(Mqs) else np.nan
+            else:
+                Mrem  = float(_binterp(tov_cold, 5, 4)(Mb))  # cold NS remnant at fixed M_B
+                Econv = np.nan
+            _rows.append(dict(
+                params=q_tag_of(pset), sigma=sigma,
+                M_t0=MpnsT0, Mb_t0=Mb, nBc_t0=nBc0 / n_sat, YSc_t0=YS0,
+                M_tT=MpnsT, nBc_tT=nBcT / n_sat, YSc_tT=YST,
+                type=typ, M_rem=Mrem, E_conv_e53=Econv))
+
+tab = pd.DataFrame(_rows)
+_fmt = dict(M_t0='{:.2f}', Mb_t0='{:.2f}', nBc_t0='{:.2f}', YSc_t0='{:.2f}',
+            M_tT='{:.2f}', nBc_tT='{:.2f}', YSc_tT='{:.2f}',
+            M_rem='{:.2f}', E_conv_e53='{:.2f}')
+_disp = tab.copy()
+for _c, _f in _fmt.items():
+    _disp[_c] = _disp[_c].map(lambda v, _f=_f: '--' if not np.isfinite(v) else _f.format(v))
+print(_disp.to_string(index=False))
+import os as _os
+_os.makedirs('../output/figure_data', exist_ok=True)
+tab.to_csv(f'../output/figure_data/table_outcomes_{xsd_tag}.csv', index=False)
+with open(f'../output/figure_data/table_outcomes_{xsd_tag}.tex', 'w') as _f:
+    _f.write(_disp.to_latex(index=False, escape=False))
+print('\nwrote table_outcomes CSV + tex to ../output/figure_data/')
+
+
+# %% [markdown]
+# ## Export — figure data + guide for Claude Science
+#
+# Writes `../output/figure_data/`: (i) a flat CSV of the Fig-5 σ_crit grid, and
+# (ii) `figures_guide.md` describing every paper/study figure (axes, encodings,
+# what it shows, what to look for) so Claude Science can analyse and comment
+# without the notebook. The outcomes table CSV/tex is already written above; the
+# figure PDFs live in `../output/figures/`; TOV/nucleation `.dat` tables in
+# `../output/tables_*`; the raw σ_crit grid `.npz` in `../output/mc_cfl/`.
+
+# %%
+# ============================================================================
+#  Export cell: Fig-5 grid -> flat CSV, and a written figures_guide.md.
+# ============================================================================
+import os as _os
+_os.makedirs('../output/figure_data', exist_ok=True)
+
+# (1) Fig-5 sigma_crit grid -> long CSV (one row per (alpha,B4,Delta0) cell).
+try:
+    _g = np.load(f'../output/mc_cfl/sigma_crit_grid_{xsd_tag}_MT0{MT0_grid_thr[0]:.2f}_'
+                 f'saddlepoint-coulomb_minimize-unpCFL.npz')
+    _al, _B4, _D0 = _g['alpha_slices'], _g['B4_grid'], _g['Delta0_grid']
+    _S, _M, _Rn = _g['sig_crit'], _g['M_max'], _g['reason']
+    _rows_csv = ['alpha_s,B4_MeV,Delta0_MeV,sigma_crit_MeVfm2,M_max_Msun,reason_code']
+    for ia in range(len(_al)):
+        for i in range(len(_D0)):
+            for j in range(len(_B4)):
+                _rows_csv.append(f"{_al[ia]:.6g},{_B4[j]:.6g},{_D0[i]:.6g},"
+                                 f"{_S[ia,i,j]:.6g},{_M[ia,i,j]:.6g},{int(_Rn[ia,i,j])}")
+    open('../output/figure_data/fig5_sigmacrit_grid.csv', 'w').write('\n'.join(_rows_csv))
+    print(f'wrote fig5_sigmacrit_grid.csv ({len(_rows_csv)-1} cells)')
+except FileNotFoundError:
+    print('Fig 5 npz not found — run the IV.3 sigma_crit scan first')
+
+# (2) figures_guide.md
+_GUIDE = r"""# Figure & table guide — 2-family quark nucleation paper
+
+Reason codes (Fig 5 grid `reason_code`): 0=solve-fail, 1=Witten (SQM not abs. stable),
+2=re-hadronization, 3=quasi-re-hadr., 4=M_max<2 Msun, 5=OK (accepted), 6=2-flavour bound.
+`sigma_crit` NaN = non-viable cell; +inf = nucleates for all sigma tested.
+
+## Fig 1 — nucleation barrier & critical quantities (fixed Y_L, sigma; one set)
+(a) barrier W(R) at T=30 MeV for n_B^H/n_0 = 1,3,5 (colour) and the three phases
+(unpaired ':' , CFL '--', unpCFL '-'), dot = critical point R_*. (b,c,d) R_*, W_*/T,
+log10 tau vs n_B^H/n_0, coloured by T. Look for: barrier height/critical radius trends.
+
+## Fig 1b — same panels, T fixed, colour = sigma (sigma-sweep variant of Fig 1).
+
+## Fig 2 — stellar sequences, EoS & central density (M-R, P(mu_B), n_Bc vs M).
+Hadronic vs quark branches; observational M-R constraints overlaid.
+
+## Fig 3 — R_*, W_*/T, log10 tau, sigma_crit at the PNS centre vs M_PNS
+2x2, colour = sigma, line style = phase. (a) R_*, (b) W_*/T, (c) log10 tau (dashed
+line = tau target), (d) sigma_crit(tau=target) vs M_PNS (colour = quark set OR tau).
+Red vertical guides = fixed M_PNS / baryon-matched cold star. Look for: where the
+central droplet is largest/barrier lowest along the star sequence.
+
+## Fig 4 — T_nuc(n_B^H) nucleation-condition curves (one panel per PNS thermal state)
+The (n_B^H, T) locus where central tau = tau_target, per phase. Above/right of a
+curve the star nucleates. Look for: which densities/temperatures permit nucleation.
+
+## Fig 5 — sigma_crit(B^{1/4}, Delta_0) map, two alpha_s panels  [DATA: fig5_sigmacrit_grid.csv]
+Viridis heatmap of the critical surface tension at the PNS centre (M_T0=1.4, tau=1 ms).
+White solid = iso-sigma_crit contours; magenta dashed = iso-M_max; coloured outlines =
+excluded zones (vermillion M_max<2, green Witten, grey 2-flavour, blue re-hadr.). Look
+for: the accepted-parameter island and how sigma_crit varies with B^{1/4} and Delta_0.
+
+## Fig 5a — M-R and P_CFL(mu_B) of the viable cells, coloured by sigma_crit
+Every sigma_crit-viable cell replayed (cold CFL EoS + TOV); curves coloured by
+sigma_crit on the Fig-5 scale; hadronic reference black. Look for: spread of QS
+radii/max masses across the accepted region.
+
+## (unnumbered) unpaired sigma_crit(B^{1/4}, alpha_s) — single and three-m_s panels.
+
+## Study — droplet observables at nucleation (tau = 1 s)
+Observables: R_* [fm]; W_*/T; N_B^{Q*}=(4/3)pi R_*^3 n_B^{Q*} (quark interior baryon
+number of the critical droplet); Y_S^H (hadronic strangeness fraction).
+- Plot 1: the four vs n_B^H/n_0 along the tau=1 s curve at fixed (Y_L^H, sigma), one
+  quark set (colour = sigma).
+- Plot 2a: scatter, the four vs sigma_crit, one point per viable Fig-5 cell (colour =
+  alpha_s) — GLOBAL trends across parameter space.
+- Plot 2b: the four vs M_PNS (colour = sigma), one quark set.
+Goal: identify generic magnitudes/scalings of the critical droplet at nucleation
+(is N_B^{Q*} ~ O(1-10)? does R_* cluster? does Y_S^H track density?).
+
+## Study — W(R) large-R check
+W(R) pushed to ~100 fm for coulomb_minimize / screening charge modes. Question: does
+W(R) turn over into a local MINIMUM at large R (metastable finite droplet / frustrated
+phase) or is it monotone past the barrier R_*? Printed verdict per mode.
+
+## Table — PNS evolution outcomes  [DATA: table_outcomes_<tag>.csv/.tex]
+Rows = (quark set, sigma, initial M^PNS at t_0). Columns: t_0 {M^PNS, M_B, n_Bc^H/n_0,
+Y_Sc^H}; t_Tmax {M^PNS, n_Bc^H/n_0, Y_Sc^H}; remnant {type NS/QS, M, E_conv [1e53 erg]}.
+Decision: sigma < sigma_crit(snapshot) => nucleates; converts at t_0 else t_Tmax else
+stays NS. E_conv = (M^PNS_convert - M_QS)c^2 at fixed M_B. '--' = state/branch absent.
+Look for: which (set, sigma) convert early (t_0), late (t_Tmax), or cool to NS, and the
+energy released.
+"""
+open('../output/figure_data/figures_guide.md', 'w').write(_GUIDE)
+print('wrote figures_guide.md')
+print('Claude-Science bundle in ../output/figure_data/: figures_guide.md, '
+      'table_outcomes_*.csv/.tex, fig5_sigmacrit_grid.csv (+ PDFs in ../output/figures/).')
