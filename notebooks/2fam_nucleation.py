@@ -55,15 +55,11 @@
 import sys, os
 
 # ─── Install the packages ─────────────────────────────────────────
-# eos: no local source in this repo → install from GitHub.
 # !{sys.executable} -m pip install --no-deps --force-reinstall git+https://github.com/guerrinimirco/eos.git --quiet
 print("eos package loaded successfully!")
-# nucleation: developed IN THIS REPO. Put the repo root FIRST on sys.path so
-# `import nucleation` always resolves to the local source (edits live; restart
-# the kernel to reload changed modules). This beats any copy in site-packages,
-# so a stray `pip install ...metastability-nucleation.git` can't shadow the repo.
-# Do NOT re-enable such a git install here — it silently breaks local editing.
-sys.path.insert(0, os.path.abspath('..'))
+# NOTE: force-reinstall pulls origin/main — PUSH local commits first or this
+# reinstalls stale GitHub code (repo is metastability-nucleation, not nucleation).
+# !{sys.executable} -m pip install --no-deps --force-reinstall git+https://github.com/guerrinimirco/metastability-nucleation.git --quiet
 print("nucleation package loaded successfully!")
 
 
@@ -130,6 +126,10 @@ OKAB = dict(orange='#E69F00', sky='#56B4E9', green='#009E73', blue='#0072B2',
 # well-separated hues (blue→orange→green→vermillion→purple→sky), no yellow
 # (poor contrast on white) and no black/grey (reserved for reference lines).
 OKAB_CAT = ('#0072B2', '#E69F00', '#009E73', '#D55E00', '#CC79A7', '#56B4E9')
+
+# Phase line thickness — ONE source of truth so Fig 1 / σ-sweep / Fig 6 stay
+# coherent (unpCFL solid+thick, CFL/unpaired thinner). Edit here to rescale all.
+PHASE_LW = {'unpCFL': 2.1, 'cfl': 1.4, 'unpaired': 1.4}
 
 # Precomputed NICER/HESS contours live in the sibling `eos` project; the path
 # is relative to the notebooks/ cwd. Regenerate offline if the samples change.
@@ -268,9 +268,9 @@ params = create_custom_parametrization(
 # =============================================================================
 quark_param_sets = [
     dict(alpha=0.08*np.pi/2, B4=158.0, Delta0=157.0, m_s=100.0),
-    dict(alpha=0.3*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
-    dict(alpha=0.1*np.pi/2, B4=450.0, Delta0=80.0, m_s=100.0),
-    dict(alpha=0.3*np.pi/2, B4=165.0, Delta0=200.0, m_s=100.0),
+    #dict(alpha=0.3*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
+    dict(alpha=0.1*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
+    #dict(alpha=0.3*np.pi/2, B4=165.0, Delta0=200.0, m_s=100.0),
     #dict(alpha=0.3*np.pi/2, B4=150.0, Delta0=100.0, m_s=100.0),
     #dict(alpha=0.3*np.pi/2, B4=160.0, Delta0=150.0, m_s=100.0),
     #dict(alpha=0.18*np.pi/2, B4=150.0, Delta0=126.0, m_s=100.0),  # marginalized posterior
@@ -310,7 +310,7 @@ tau_target = 1e-3         # s  (1 ms)
 
 # Surface tensions σ of the quark–hadron interface to scan [MeV/fm^2].
 # Used by the Q* tables (Part II.5) and every nucleation observable downstream.
-sigma_list = [50.0, 100.0, 150, 200]
+sigma_list = [50.0, 80, 100.0, 150, 200]
 
 # ── unpCFL crossover radius ──────────────────────────────────────────────────
 # unpCFL droplet = CFL core + unpaired mantle, switching at the coherence radius
@@ -1341,14 +1341,14 @@ for F1_SET in quark_param_sets[::-1]:
     F1_YLH    = 0.25
     F1_SIGMA  = 100.0
     F1_TW     = 30.0                                 # panel (a) temperature [MeV]
-    F1_DENS   = [1.0, 3, 7]                      # panel (a) n_B^H / n_0
-    F1_TEMPS  = [20.0, 40.0, 60.0]       # panels (b,c,d) temperatures [MeV]
+    F1_DENS   = [1.0, 4, 8]                      # panel (a) n_B^H / n_0
+    F1_TEMPS  = [20.0, 30.0, 40.0, 50.0, 60.0]       # panels (b,c,d) temperatures [MeV]
 
     _PHASE_LS    = {'unpCFL': '-', 'cfl': '--', 'unpaired': ':'}   # line style per phase
     _PHASE_FILL  = {'unpCFL': True, 'cfl': False, 'unpaired': False}
     _PHASE_LBL   = {'unpCFL': 'unpCFL', 'cfl': 'CFL', 'unpaired': 'unpaired'}
-    _PHASE_LW    = {'unpCFL': 2.6, 'cfl': 1.7, 'unpaired': 1.7}    # solid (unpCFL) drawn thicker
-    _PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.55}   # fade dashed/dotted phases
+    _PHASE_LW    = PHASE_LW                                        # shared (solid unpCFL thicker)
+    _PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.5, 'unpaired': 0.5}   # fade dashed/dotted phases
 
     _stag   = q_tag_of(F1_SET)
     _params = get_alphabag_custom(alpha=F1_SET['alpha'], B4=F1_SET['B4'], m_s=F1_SET['m_s'])
@@ -1403,17 +1403,17 @@ for F1_SET in quark_param_sets[::-1]:
     if np.isfinite(_Rdelta):
         axA.axvspan(0, _Rdelta, color='tab:blue', alpha=0.07, zorder=0)
     axA.axhline(0, color='0.6', lw=0.7, zorder=0)
-    axA.set_xlim(0, 8); axA.set_ylim(-0.2 * _Wmax, 1.18 * _Wmax)
+    axA.set_xlim(0, 7); axA.set_ylim(0, 10000)
     axA.set_xlabel(r'$R$ [fm]'); axA.set_ylabel(r'$W$ [MeV]')
     axA.set_title(rf'$Y_L^H={F1_YLH}$, $T={F1_TW:.0f}$ MeV, '
                   rf'$\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
     panel_label(axA, '(a)', corner='lower')
     _lgA = axA.legend([Line2D([], [], color=_cA[i], lw=2) for i in range(len(F1_DENS))],
-                      [rf'$n_B^H/n_\mathrm{{sat}}={int(x)}$' for x in F1_DENS], loc='upper left')
+                      [rf'$n_B^H/n_\mathrm{{sat}}={int(x)}$' for x in F1_DENS], loc='upper right',labelspacing=0.25)
     axA.add_artist(_lgA)
     # phase legend in the opposite (also empty) top corner -> no overlap with density legend or peak
     axA.legend([Line2D([], [], color='0.3', ls=_PHASE_LS[p]) for p in _PHASE_LS],
-               [_PHASE_LBL[p] for p in _PHASE_LS], loc='upper right')
+               [_PHASE_LBL[p] for p in _PHASE_LS], loc='upper left')
 
     # ---- (b,c,d) vs n_B^H/n_0: temperature = colour, phase = line style ----
     _cT = plt.cm.plasma(np.linspace(0.05, 0.85, len(F1_TEMPS)))
@@ -1434,7 +1434,7 @@ for F1_SET in quark_param_sets[::-1]:
 
 
     _f1_vs_nBH(axB, lambda o, it: o.R_c[:, _iYL, it], r'$R_*$ [fm]')
-    axB.set_ylim(1, 8); axB.set_title(rf'$Y_L^H={F1_YLH}$, $\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
+    axB.set_ylim(1, 7); axB.set_title(rf'$Y_L^H={F1_YLH}$, $\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
     panel_label(axB, '(b)', corner='lower')
     axB.legend([Line2D([], [], color=_cT[i], lw=2) for i in range(len(F1_TEMPS))],
                [rf'$T={int(T)}\,\,\rm MeV$' for T in F1_TEMPS], loc='upper right')
@@ -1451,28 +1451,7 @@ for F1_SET in quark_param_sets[::-1]:
     fig.savefig(f'../output/figures/paper_fig1_barrier_{xsd_tag}_{_stag}.pdf', bbox_inches='tight')
     plt.show()
 
-    # ---- Alternative panel (d): log10 tau vs T (density = colour, phase = style).
-    #      Both x-axis choices are produced; pick whichever reads better for the paper.
-    figD, axDt = plt.subplots(figsize=(PRD_COL_W, 3.0), constrained_layout=True)
-    for _ci, _x in enumerate(F1_DENS):
-        _i = int(np.argmin(np.abs(_nBg / n_sat - _x)))
-        for _ph, _ls in _PHASE_LS.items():
-            _o = _f1_get(_ph)
-            if _o is None:
-                continue
-            with np.errstate(divide='ignore', invalid='ignore'):
-                axDt.plot(_Tg, np.log10(_o.tau[_i, _iYL, :]), color=_cA[_ci], ls=_ls,
-                          lw=_PHASE_LW[_ph], alpha=_PHASE_ALPHA[_ph])
-    axDt.axhline(np.log10(1e-3), color='k', ls=(0, (1, 1)), lw=0.9)
-    axDt.set_xlabel(r'$T$ [MeV]'); axDt.set_ylabel(r'$\log_{10}\,\tau$ [s]')
-    axDt.set_xlim(0, 80); axDt.set_ylim(-60, 60)
-    axDt.set_title(rf'$Y_L^H={F1_YLH}$, $\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
-    axDt.legend([Line2D([], [], color=_cA[i], lw=2) for i in range(len(F1_DENS))]
-                + [Line2D([], [], color='0.3', ls=_PHASE_LS[p]) for p in _PHASE_LS],
-                [rf'$n_B^H/n_\mathrm{{sat}}={int(x)}$' for x in F1_DENS] + [_PHASE_LBL[p] for p in _PHASE_LS],
-                loc='upper right', ncol=2)
-    figD.savefig(f'../output/figures/paper_fig1d_tau_vs_T_{xsd_tag}_{_stag}.pdf', bbox_inches='tight')
-    plt.show()
+   
 
 
 # %% [markdown]
@@ -1480,17 +1459,55 @@ for F1_SET in quark_param_sets[::-1]:
 #
 # Mirror of Fig 1 with the roles of $T$ and $\sigma$ swapped: fix $T$, sweep
 # $\sigma$ (colour). **(a)** $W(R)$ at one $n_B^H$; **(b,c,d)** $R_*$, $W_*/T$,
-# $\log_{10}\tau$ vs $n_B^H/n_\mathrm{sat}$.  Reuses the Fig-1 knobs/helpers
-# (`_f1_get`, `_f1_Rx`, `_iT`, `_nBg`, `_Tg`, `_iYL`, `_params`, `_PHASE_*`), so
-# run the Figure-1 cell first.  Tables must exist for each σ in `F1S_SIGMAS`.
+# $\log_{10}\tau$ vs $n_B^H/n_\mathrm{sat}$.  Self-contained like Fig 1: pick the
+# quark parametrization via `F1_SET` in the cell.  Tables must exist for each σ
+# in `F1S_SIGMAS`.
 
 # %%
 # ============================================================================
 #  Figure 1 variant: fix T, sweep σ (colour = σ).  Panels mirror Fig 1(a-d).
+#  Self-contained (mirrors Fig 1): pick the quark parametrization here — no
+#  longer inherits the Fig-1 loop's leaked bindings.
 # ============================================================================
+F1_SET     = quark_param_sets[0]       # <-- SELECT quark parametrization (also sets Delta0)
+F1_FLAVOR  = 'saddlepoint'             # 'frozen' | 'saddlepoint'
+F1_CHARGE  = 'coulomb_minimize'        # 'lcn' | 'gcn' | 'coulomb_minimize'
+F1_YLH     = 0.25
+
 F1S_T      = 30.0                      # fixed temperature [MeV]
 F1S_SIGMAS = sigma_list                # σ values to sweep (colour); tables must exist
 F1S_DENS_A = 3.0                       # panel (a): single n_B^H/n_sat for the W(R) sweep
+
+# phase styling — identical to Fig 1 (unpCFL solid+thick, CFL dashed, unpaired dotted)
+_PHASE_LS    = {'unpCFL': '-', 'cfl': '--', 'unpaired': ':'}
+_PHASE_FILL  = {'unpCFL': True, 'cfl': False, 'unpaired': False}
+_PHASE_LBL   = {'unpCFL': 'unpCFL', 'cfl': 'CFL', 'unpaired': 'unpaired'}
+_PHASE_LW    = PHASE_LW                                        # shared thickness
+_PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.55}
+
+_stag   = q_tag_of(F1_SET)
+_params = get_alphabag_custom(alpha=F1_SET['alpha'], B4=F1_SET['B4'], m_s=F1_SET['m_s'])
+
+
+def _f1_get(phase, sg):
+    """nuc_sets table for this method/phase/set/σ (or None)."""
+    return nuc_sets.get(f"Htrapped_{F1_FLAVOR}_{F1_CHARGE}_{phase}_{_stag}_s{int(sg)}")
+
+
+def _f1_Rx(T):
+    """unpCFL crossover radius R_x(T)=hc/Δ(T) — same CFL gap as the EoS."""
+    return float(nuc_an.crossover_radius(T, F1_SET['Delta0']))
+
+
+_ref = _f1_get('unpCFL', F1S_SIGMAS[0])
+_nBg = _ref.hadronic_grids['n_B_H']
+_Tg  = _ref.hadronic_grids['T']
+_iYL = int(np.argmin(np.abs(_ref.hadronic_grids['Y_L_H'] - F1_YLH)))
+
+
+def _iT(T):
+    return int(np.argmin(np.abs(_Tg - T)))
+
 
 _cS = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1S_SIGMAS)))
 
@@ -1560,7 +1577,7 @@ axD.axhline(np.log10(1e-3), color='k', ls=(0, (1, 1)), lw=0.9)   # τ = 1 ms
 axD.set_ylim(-60, 60); axD.set_title(rf'$Y_L^H={F1_YLH}$, $T={F1S_T:.0f}$ MeV')
 panel_label(axD, '(d)', corner='lower')
 
-fig.savefig(f'../output/figures/paper_fig1_sigma_sweep_{xsd_tag}.pdf', bbox_inches='tight')
+fig.savefig(f'../output/figures/paper_fig1_sigma_sweep_{xsd_tag}_{_stag}.pdf', bbox_inches='tight')
 plt.show()
 
 
@@ -1582,9 +1599,8 @@ plt.show()
 F2_SET   = quark_param_sets[0]                   # quark parametrization (ref plot + Delta0)
 _QS_GREENS = ['#74c476', '#31a354', '#006d2c']   # QS star colours, per quark set (light->dark)
 
-# larger in-plot fonts (persists for later figures too; move to the import cell for all).
-plt.rcParams.update({'font.size': 14, 'axes.labelsize': 15, 'axes.titlesize': 14,
-                     'xtick.labelsize': 13, 'ytick.labelsize': 13, 'legend.fontsize': 10})
+# fonts come from set_paper_style() (10 pt = PRD body), same as every other paper
+# figure — do NOT override here or Fig 2 desyncs (this made PSR/HESS look tiny).
 
 _f2params = get_alphabag_custom(alpha=F2_SET['alpha'], B4=F2_SET['B4'], m_s=F2_SET['m_s'])
 
@@ -1625,7 +1641,7 @@ _F2SEQ = [
          a=(0.80, -0.2, 0.03, 'right', 'bottom'),
          b=(0.6,  -0.04, 0.12, 'center', 'bottom'),
          d=(0.78, -0.06, 0.4,  'right', 'bottom'),
-         cdot=(0, 26, 'center', 'bottom'), cstar=(0, 34, 'center', 'bottom'),  # vertical (90 deg); M_max arrow longer
+         cdot=(-9, 26, 'center', 'bottom'), cstar=(-9, 34, 'center', 'bottom'),  # tilted slightly left; M_max arrow longer
          ddot=(-8, 2, 'right', 'bottom'),  dstar=(-6, -2, 'right', 'top')),
 ]
 for _i, (_p, _st) in enumerate(_qs_tov):
@@ -1635,7 +1651,7 @@ for _i, (_p, _st) in enumerate(_qs_tov):
         b=(0.9, 0.05, -0.04, 'left', 'top'),
         d=(0.92, 0.03, 0.2, 'left', 'bottom'),
         cdot=(-13, 13, 'center', 'bottom'), cstar=(-13, 13, 'center', 'bottom'),  # ~45 deg CCW arrows
-        ddot=(0, -9, 'center', 'top'),   dstar=(7, 0, 'left', 'center')))
+        ddot=(0, -9, 'center', 'top'),   dstar=(-7, 0, 'right', 'center')))       # M_max label on the LEFT of the point
 _F2SEQ += [
     dict(arr=tov_trapped[(PNS_T0['YLH'], PNS_T0['S'])], c=PNS_T0['color'],
          lbl=r'PNS ($t_0$)', yls=(PNS_T0['YLH'], PNS_T0['S']),
@@ -1671,7 +1687,7 @@ def _inline(ax, xs, ys, text, color, anchor):
     if xs.size == 0:
         return
     j = int(np.clip(round(frac * (xs.size - 1)), 0, xs.size - 1))
-    ax.text(xs[j] + dx, ys[j] + dy, text, color=color, fontsize=12.5, fontweight='bold',
+    ax.text(xs[j] + dx, ys[j] + dy, text, color=color, fontsize=10, fontweight='bold',
             ha=ha, va=va, zorder=6, clip_on=True)
 
 
@@ -1805,7 +1821,7 @@ from eos.alphabag.thermodynamics_quarks import T_critical   # same Tc as the CFL
 # Phase line styling — SAME convention as Figure 1: unpCFL solid+thick, the other
 # two thinner and faded (unpCFL drawn last -> on top).  Order = draw order.
 _PHASE_LS    = {'unpaired': ':', 'cfl': '--', 'unpCFL': '-'}
-_PHASE_LW    = {'unpCFL': 2.6, 'cfl': 1.7, 'unpaired': 1.7}
+_PHASE_LW    = PHASE_LW                                        # shared thickness
 _PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.55}
 _PHASE_LBL   = {'unpaired': 'unpaired', 'cfl': 'CFL', 'unpCFL': 'unpCFL'}
 # sigma -> colour (viridis over the available sigma_list)
@@ -1994,7 +2010,7 @@ def _dP_along(nb, Tn, ph, yl):
 
 # phase styling — same convention as Fig 6 (unpCFL solid+thick, others faded)
 _QN_LS    = {'unpaired': ':', 'cfl': '--', 'unpCFL': '-'}   # order = draw order
-_QN_LW    = {'unpCFL': 2.6, 'cfl': 1.7, 'unpaired': 1.7}
+_QN_LW    = PHASE_LW                                        # shared thickness (see Fig 6)
 _QN_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.55}
 _QN_LBL   = {'unpaired': 'unpaired', 'cfl': 'CFL', 'unpCFL': 'unpCFL'}
 _qsig_col = {sg: mpl.cm.viridis(t) for sg, t in

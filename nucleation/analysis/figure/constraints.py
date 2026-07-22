@@ -18,7 +18,7 @@ from .style import STANDARD_COLORS
 # anchor = (dx, dy, ha, va): dx/dy shift the label from the blob centroid in
 # DATA units (dx in km, dy in M_sun); ha/va are its text alignment. dy>0 + 'bottom'
 # = above the blob, dy<0 + 'top' = below it. MR_LABEL_FS sets the font size.
-MR_LABEL_FS = 10          # match the J0952-0607 mass-band label
+MR_LABEL_FS = 8.5         # source labels (PSR/HESS + mass band); < body text on purpose
 MR_CONSTRAINTS = {
     "J0030": ("PSR J0030+0451", STANDARD_COLORS['Orange'],  (0.0,  -0.1, 'center',  'center')),     
     "J0740": ("PSR J0740+6620", STANDARD_COLORS['Blue'],    (0.0,  0.0, 'center', 'center')),
@@ -101,5 +101,5 @@ def add_observational_constraints(ax, contour_dir, show_mass_bands=True,
             # independent of the current xlim, so it never escapes the panel.
             ax.text(0.02, float(by_lvl["68"]["upper"]), " " + disp,
                     transform=ax.get_yaxis_transform(), ha="left", va="bottom",
-                    fontsize=10, fontweight='bold', color=txt_c, zorder=3,
+                    fontsize=MR_LABEL_FS, fontweight='bold', color=txt_c, zorder=3,
                     clip_on=True)
