@@ -22,17 +22,27 @@ STANDARD_COLORS = {
 }
 
 
+# PRD / REVTeX two-column geometry [inches]. A figure MUST be built at the
+# width it will occupy on the page and included at 1:1 (no \includegraphics
+# width= rescaling, which would shrink the fonts). Then the pt sizes below land
+# as-is on paper. Single column = \columnwidth, full width = \textwidth span.
+PRD_COL_W  = 3.375
+PRD_FULL_W = 7.0
+
+
 def set_paper_style():
     """Publication rcParams: CMU Serif + Computer-Modern math (matches a LaTeX
     two-column layout), inward ticks on all four sides, frame-less legends,
-    300 dpi tight saves."""
+    300 dpi tight saves. All text is 10 pt = PRD body-text size, so labels,
+    ticks and legends match the surrounding paper when the figure is placed at
+    its true width (see PRD_COL_W / PRD_FULL_W)."""
     mpl.rcParams.update({
         'font.family': 'serif',
         'font.serif': ['CMU Serif', 'STIXGeneral', 'DejaVu Serif'],
         'mathtext.fontset': 'cm',                 # CM math to match CMU Serif
-        'font.size': 14, 'axes.labelsize': 16, 'axes.titlesize': 13,
-        'xtick.labelsize': 13, 'ytick.labelsize': 13,
-        'legend.fontsize': 12, 'legend.frameon': False,
+        'font.size': 10, 'axes.labelsize': 10, 'axes.titlesize': 10,
+        'xtick.labelsize': 10, 'ytick.labelsize': 10,
+        'legend.fontsize': 10, 'legend.frameon': False,
         'lines.linewidth': 1.8, 'axes.linewidth': 0.9,
         'xtick.direction': 'in', 'ytick.direction': 'in',
         'xtick.top': True, 'ytick.right': True,

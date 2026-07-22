@@ -116,9 +116,19 @@ import nucleation.analysis as nuc_an               # sigma_crit scan engine
 
 # ─── Figure styling + observational-constraint overlays (shared, in-package) ─
 from nucleation.analysis.figure import (
-    set_paper_style, panel_label, STANDARD_COLORS,
+    set_paper_style, panel_label, STANDARD_COLORS, PRD_COL_W, PRD_FULL_W,
     add_observational_constraints,
 )
+
+# ─── Palette convention (whole notebook) ─────────────────────────────────────
+# Categorical groups (a few discrete lines): Okabe-Ito colourblind-safe set.
+# Continuous/sequential fields (heatmaps, σ-gradients): viridis. Diverging: RdBu.
+OKAB = dict(orange='#E69F00', sky='#56B4E9', green='#009E73', blue='#0072B2',
+            vermillion='#D55E00', purple='#CC79A7', grey='#9a9a9a')
+# ordered picks for "colour = category" line groups: OKAB_CAT[:n] gives n
+# well-separated hues (blue→orange→green→vermillion→purple→sky), no yellow
+# (poor contrast on white) and no black/grey (reserved for reference lines).
+OKAB_CAT = ('#0072B2', '#E69F00', '#009E73', '#D55E00', '#CC79A7', '#56B4E9')
 
 # Precomputed NICER/HESS contours live in the sibling `eos` project; the path
 # is relative to the notebooks/ cwd. Regenerate offline if the samples change.
@@ -1365,11 +1375,11 @@ for F1_SET in quark_param_sets[::-1]:
         return int(np.argmin(np.abs(_Tg - T)))
 
 
-    fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(9.5, 9.0),
+    fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(PRD_FULL_W, 6.6),
                                                  constrained_layout=True)
 
     # ---- (a) W(R): density = colour, phase = line style ----
-    _cA = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1_DENS)))
+    _cA = OKAB_CAT[:len(F1_DENS)]                    # density = category (Okabe-Ito)
     _Rg = np.linspace(0.01, 14.0, 400)
     _Wmax = 0.0
     for _ci, _x in enumerate(F1_DENS):
@@ -1405,7 +1415,7 @@ for F1_SET in quark_param_sets[::-1]:
                [_PHASE_LBL[p] for p in _PHASE_LS], loc='upper right')
 
     # ---- (b,c,d) vs n_B^H/n_0: temperature = colour, phase = line style ----
-    _cT = plt.cm.plasma(np.linspace(0.05, 0.85, len(F1_TEMPS)))
+    _cT = OKAB_CAT[:len(F1_TEMPS)]                   # temperature = category (Okabe-Ito)
 
 
     def _f1_vs_nBH(ax, getter, ylabel, logy=False):
@@ -1442,7 +1452,7 @@ for F1_SET in quark_param_sets[::-1]:
 
     # ---- Alternative panel (d): log10 tau vs T (density = colour, phase = style).
     #      Both x-axis choices are produced; pick whichever reads better for the paper.
-    figD, axDt = plt.subplots(figsize=(5.2, 4.6), constrained_layout=True)
+    figD, axDt = plt.subplots(figsize=(PRD_COL_W, 3.0), constrained_layout=True)
     for _ci, _x in enumerate(F1_DENS):
         _i = int(np.argmin(np.abs(_nBg / n_sat - _x)))
         for _ph, _ls in _PHASE_LS.items():
@@ -1483,7 +1493,7 @@ F1S_DENS_A = 3.0                       # panel (a): single n_B^H/n_sat for the W
 
 _cS = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1S_SIGMAS)))
 
-fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(9.5, 9.0),
+fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(PRD_FULL_W, 6.6),
                                              constrained_layout=True)
 
 # ---- (a) W(R) at fixed (T, n_B): colour = σ, line style = phase ----
@@ -1704,7 +1714,7 @@ def _grid(ax):
 
 
 
-fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(9.5, 9.0),
+fig, ((axA, axB), (axC, axD)) = plt.subplots(2, 2, figsize=(PRD_FULL_W, 6.6),
                                              constrained_layout=True)
 
 # (a) M-R.  Fix the view FIRST so the constraint fills (some reach R~21) can't
@@ -1787,6 +1797,7 @@ set_paper_style()
 FN_FLAVOR = 'saddlepoint'
 FN_CHARGE = 'coulomb_minimize'
 FN_TAU    = 1e-3                         # s  (tau_target)
+F6_SIGMAS = [150,200,250]#sigma_list                   # which sigmas to draw (subset of sigma_list; colours stay fixed)
 FN_CUT_CFL_ABOVE_TC = True               # mask the CFL curve where T_nuc > T_CFL (gap vanishes above Tc)
 from eos.alphabag.thermodynamics_quarks import T_critical   # same Tc as the CFL EoS gap
 
@@ -1798,7 +1809,7 @@ _PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.55}
 _PHASE_LBL   = {'unpaired': 'unpaired', 'cfl': 'CFL', 'unpCFL': 'unpCFL'}
 # sigma -> colour (viridis over the available sigma_list)
 _sig_col = {sg: mpl.cm.viridis(t) for sg, t in
-            zip(sigma_list, np.linspace(0.15, 0.85, len(sigma_list)))}
+            zip(F6_SIGMAS, np.linspace(0.15, 0.85, len(F6_SIGMAS)))}
 
 # TOV columns: 0=e_c 1=P_c 2=n_Bc 3=R 4=M 5=Mb.
 _NBC, _M, _MB = 2, 4, 5
@@ -1870,11 +1881,12 @@ for FN_SET in quark_param_sets:
     _panels = [dict(**PNS_T0,   lab='(a)'),         # left  = t_0
                dict(**PNS_TMAX, lab='(b)')]         # right = t_Tmax
 
-    fig, axes = plt.subplots(1, 2, figsize=(9, 4.6), sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(PRD_FULL_W, 3.6), sharey=True,
+                             constrained_layout=True)
     for ax, pan in zip(axes, _panels):
         YL, S, col = pan['YLH'], pan['S'], pan['color']
         YL_used = None
-        for sg in sigma_list:
+        for sg in F6_SIGMAS:
             for ph, ls in _PHASE_LS.items():          # unpCFL drawn last -> on top
                 stem = f"Htrapped_{FN_FLAVOR}_{FN_CHARGE}_{ph}_{_tag}_s{int(sg)}"
                 if stem not in nuc_sets:
@@ -1916,13 +1928,12 @@ for FN_SET in quark_param_sets:
     _ph_handles = [Line2D([], [], color='k', ls=_PHASE_LS[p], lw=_PHASE_LW[p],
                           alpha=_PHASE_ALPHA[p], label=_PHASE_LBL[p]) for p in _PHASE_LS]
     _sig_handles = [Line2D([], [], color=_sig_col[sg], ls='-', label=f'{int(sg)}')
-                    for sg in sigma_list]
+                    for sg in F6_SIGMAS]
     axes[0].legend(handles=_ph_handles, loc='upper right')
     _lg = axes[1].legend(handles=_sig_handles, loc='upper right',
                          title=r'$\sigma\;[\mathrm{MeV\,fm^{-2}}]$')
     _lg.get_title()#.set_fontsize(12)                   # smaller units title
 
-    fig.tight_layout()
     fig.savefig(f'../output/figures/paper_fig6_Tnuc_{xsd_tag}_{_tag}.pdf',
                 bbox_inches='tight')
     plt.show()
@@ -1956,9 +1967,29 @@ QN_FLAVOR = 'saddlepoint'
 QN_CHARGE = 'coulomb_minimize'
 QN_YLH    = 0.25                         # fixed Y_L^H
 QN_TAU    = 1e-3                         # tau_nuc [s]
+QN_SIGMAS = sigma_list                   # which sigmas to draw (subset of sigma_list; colours stay fixed)
+QN_SHOW_DP = True                        # panel (f): bulk ΔP=P_Q*-P_H along the curve
 QN_CUT_CFL_ABOVE_TC = True               # drop CFL points with T_nuc > T_CFL (gap gone)
 _qtag  = q_tag_of(QN_SET)
 _QN_TC = float(T_critical(QN_SET['Delta0']))
+_qn_params = get_alphabag_custom(alpha=QN_SET['alpha'], B4=QN_SET['B4'], m_s=QN_SET['m_s'])
+_qn_D0     = QN_SET['Delta0']
+
+def _dP_along(nb, Tn, ph, yl):
+    """bulk ΔP = P_Q*-P_H [MeV/fm^3] at each (n_B^H, yl, T_nuc) point of the curve.
+    Q* is solved at matched mu_B (saddlepoint), so this is the DRIVING pressure for
+    the transition: ΔP>0 favours quark matter, ΔP<0 would re-hadronize. Reuses the
+    engine's rehad_pressure_profile per point since T_nuc varies along the curve.
+    ponytail: one solver build per point (~len(nb) x |sigma| x |phase|); if too slow,
+    trim QN_SIGMAS or set QN_SHOW_DP=False."""
+    dP = np.full(len(nb), np.nan)
+    for i, (n_i, T_i) in enumerate(zip(nb, Tn)):
+        _, d = nuc_an.rehad_pressure_profile(
+            H['trapped'], _qn_params, [n_i], Y_L_H=yl, T=T_i,
+            flavor_mode=QN_FLAVOR, electric_charge_mode=QN_CHARGE,
+            quark_phase=ph, Delta0=_qn_D0)
+        dP[i] = d[0]
+    return dP
 
 # phase styling — same convention as Fig 6 (unpCFL solid+thick, others faded)
 _QN_LS    = {'unpaired': ':', 'cfl': '--', 'unpCFL': '-'}   # order = draw order
@@ -1968,11 +1999,13 @@ _QN_LBL   = {'unpaired': 'unpaired', 'cfl': 'CFL', 'unpCFL': 'unpCFL'}
 _qsig_col = {sg: mpl.cm.viridis(t) for sg, t in
              zip(sigma_list, np.linspace(0.15, 0.85, len(sigma_list)))}
 
-fig, axes = plt.subplots(2, 3, figsize=(13.5, 8), constrained_layout=True)
-axA, axB, axC, axD, axE, axL = axes.ravel()
-axL.axis('off')                          # 6th panel holds the legends
+fig, axes = plt.subplots(2, 4, figsize=(18, 8), constrained_layout=True)
+axA, axB, axC, axD, axE, axF, axL, axZ = axes.ravel()
+axL.axis('off'); axZ.axis('off')         # 7th panel holds the legends, 8th empty
+if not QN_SHOW_DP:
+    axF.axis('off')
 YLu = QN_YLH
-for sg in sigma_list:
+for sg in QN_SIGMAS:
     for ph in _QN_LS:                    # unpCFL last -> drawn on top
         stem = f"Htrapped_{QN_FLAVOR}_{QN_CHARGE}_{ph}_{_qtag}_s{int(sg)}"
         if stem not in nuc_sets:
@@ -2007,8 +2040,11 @@ for sg in sigma_list:
         axC.plot(x, NB, **kw)
         axD.plot(x, YSH, **kw)
         axE.plot(x, tauc, **kw)
+        if QN_SHOW_DP:
+            axF.plot(x, _dP_along(nb, Tn, ph, YLu), **kw)
 
-for ax in (axA, axB, axC, axD, axE):
+_data_axes = (axA, axB, axC, axD, axE) + ((axF,) if QN_SHOW_DP else ())
+for ax in _data_axes:
     ax.set_xlabel(r'$n_B^H/n_{\rm sat}$')
 axA.set_ylabel(r'$R_*$ [fm]');                          axA.set_title('(a) critical radius')
 axB.set_ylabel(r'$W_*/T$');                             axB.set_title('(b) barrier / T')
@@ -2017,11 +2053,15 @@ axD.set_ylabel(r'$Y_S^H$');                             axD.set_title('(d) hadro
 axE.set_ylabel(r'$\tau$ [s]');                          axE.set_title(r'(e) $\tau$ check')
 axE.axhline(QN_TAU, color='k', ls=(0, (1, 1)), lw=1.0)  # tau_nuc reference
 axE.set_yscale('log')
+if QN_SHOW_DP:
+    axF.set_ylabel(r'$\Delta P = P_{Q^*}-P_H$ [MeV/fm$^3$]')
+    axF.set_title('(f) bulk pressure gap')
+    axF.axhline(0, color='k', ls=(0, (1, 1)), lw=1.0)   # ΔP=0 = re-hadronization threshold
 
 # legends in the empty 6th panel
 _ph_h  = [Line2D([], [], color='k', ls=_QN_LS[p], lw=_QN_LW[p], alpha=_QN_ALPHA[p],
                  label=_QN_LBL[p]) for p in _QN_LS]
-_sig_h = [Line2D([], [], color=_qsig_col[sg], ls='-', label=f'{int(sg)}') for sg in sigma_list]
+_sig_h = [Line2D([], [], color=_qsig_col[sg], ls='-', label=f'{int(sg)}') for sg in QN_SIGMAS]
 _l1 = axL.legend(handles=_ph_h, loc='upper left', title='phase'); axL.add_artist(_l1)
 axL.legend(handles=_sig_h, loc='upper right', title=r'$\sigma\;[\mathrm{MeV\,fm^{-2}}]$')
 
@@ -2101,8 +2141,11 @@ _rows = [
 ]
 
 nrow, ncol = len(_rows), len(_tags)
-fig, axes = plt.subplots(nrow, ncol, figsize=(4.2 * ncol, 3.3 * nrow),
-                         sharex='col', sharey='row', squeeze=False)
+# full page width; height keeps the original 4.2:3.3 panel aspect for nrow×ncol
+fig, axes = plt.subplots(nrow, ncol,
+                         figsize=(PRD_FULL_W, PRD_FULL_W / ncol * (3.3 / 4.2) * nrow),
+                         sharex='col', sharey='row', squeeze=False,
+                         constrained_layout=True)
 for j, tag in enumerate(_tags):
     _a = next((nuc_sets[k] for k in nuc_sets if k.endswith(f"_{tag}_s{int(sigma_list[0])}")), None)
     _YL = (float(_a.hadronic_grids['Y_L_H'][
@@ -2151,7 +2194,6 @@ axes[-1, 0].legend(handles=_vg, loc='best', fontsize=8)
 
 fig.suptitle(rf"PNS centre — $Y_L={FN2_YL:g}$, $S={FN2_S:g}$, "
              rf"{FN2_FLAVOR}/{FN2_CHARGE}", y=1.005)
-fig.tight_layout()
 fig.savefig(f'../output/figures/paper_fig7_Rstar_Wc_tau_{xsd_tag}.pdf', bbox_inches='tight')
 plt.show()
 
@@ -2200,9 +2242,6 @@ _SIG8, _RS8, _MM8, _OK8 = _F8['sig_crit'], _F8['reason'], _F8['M_max'], _F8['cfl
 _reg8 = (_regime_grid(_SIG8, _al8, _B48, _D08, float(_F8['MT0']), slices=F8_SHOW)
          if F8_REGIME else np.full(_SIG8.shape, -1, dtype=int))
 
-# Okabe-Ito colourblind-safe categorical palette (shared with the alt/diff cells).
-OKAB = dict(orange='#E69F00', sky='#56B4E9', green='#009E73', blue='#0072B2',
-            vermillion='#D55E00', purple='#CC79A7', grey='#9a9a9a')
 # excluded-region reason -> (reason int, boundary colour, label, label rotation,
 # label-on-left-panel-only). Codes pulled from nuc_an.REASON_CODE by name so this
 # never drifts when codes are renumbered. The no-rehadronization filter is the
@@ -2698,8 +2737,8 @@ from matplotlib.colors import ListedColormap
 U_MS           = m_s_fixed            # strange-quark mass [MeV] (the fixed one)
 U_MT0          = 1.4                  # nucleation-threshold grav. mass [M_sun]
 U_CHARGE       = 'coulomb_minimize'   # 'lcn' | 'gcn' | 'coulomb_minimize'
-U_ALPHA_GRID   = np.linspace(0.0, 0.6, 41)       # alpha_s   (y-axis)
-U_B4_GRID      = np.linspace(130.0, 180.0, 41)   # B^1/4 [MeV] (x-axis)
+U_ALPHA_GRID   = np.linspace(np.pi/2*0.0, np.pi/2*0.3, 31)       # alpha_s   (y-axis)
+U_B4_GRID      = np.linspace(130.0, 160.0, 51)   # B^1/4 [MeV] (x-axis)
 U_APPLY_FILTER = True                 # grey out non-viable cells (unpaired filter)
 U_NJOBS        = -1
 # -----------------------------------------------------------------------------
@@ -2775,6 +2814,7 @@ fig.tight_layout(); plt.show()
 # ============================================================================
 import dataclasses
 from scipy.optimize import brentq
+from matplotlib.ticker import MultipleLocator, FuncFormatter
 # ---- user-configurable inputs ----------------------------------------------
 U3_MS_LIST     = [80.0, 100.0, 150.0]            # three strange-quark masses [MeV]
 U3_MT0         = U_MT0                            # nucleation-threshold grav. mass [M_sun]
@@ -2788,6 +2828,9 @@ U3_ISO_MMAX    = True     # white dashed iso-M_max lines (unpaired TOV)
 U3_REJECT      = True      # coloured reject-zone boundary outlines + labels
 U3_WITTEN      = True      # green line: unpaired 3-flavour SQM abs.-stability (e/n_B=930)
 U3_TWOFLAV     = True      # grey line: 2-flavour stability (ud e/n_B=930)
+U3_WINDOW_ONLY = True      # colour sigma_crit ONLY inside the 2-flav..Witten window
+U3_FILL_QUASI  = True      # solve sigma_crit in quasi-re-hadr. cells too, so they fill
+                           # when they meet the window (quasi status never gates the mask)
 U3_STAB_NALPHA = 13        # alpha_s samples for the two stability curves (coarse=cheap)
 # -----------------------------------------------------------------------------
 # excluded-region reason -> (colour, label). Only the reasons the UNPAIRED filter
@@ -2824,14 +2867,27 @@ def _B_at_930(scalar, alpha, lo, hi):
         return np.nan
     return brentq(f, lo, hi, xtol=0.05)
 
+def _interp_curve(curve, src_al, target_al, fallback):
+    """A stability curve B(alpha) sampled on the coarse src_al, interpolated onto
+    the full target_al grid. All-NaN (no crossing in range) -> constant fallback."""
+    if curve is None:
+        return np.full_like(target_al, fallback, dtype=float)
+    m = np.isfinite(curve)
+    if m.sum() < 2:
+        return np.full_like(target_al, fallback, dtype=float)
+    return np.interp(target_al, src_al[m], curve[m])
+
 # per-m_s: unpaired viability + M_max + reason (FREE) and sigma_crit at the PNS
 # centre. Same two engine calls as the single-panel cell; drop the singleton D0 axis.
 _u3 = []
 for _ms in U3_MS_LIST:
     _cfg = dataclasses.replace(_filt_cfg, m_s=_ms)
     _ok, _mm, _rs = nuc_an.scan_unpaired_filters(U3_ALPHA_GRID, U3_B4_GRID, _cfg, n_jobs=U3_NJOBS)
+    # quasi-re-hadr. is a soft rejection -> optionally solve sigma_crit there too so
+    # the fill can extend into it (the zone stays outlined purple).
+    _ok_sig = (_ok | (_rs == _RC3['rehad_quasi'])) if U3_FILL_QUASI else _ok
     _sig = nuc_an.compute_sigma_crit(
-        _ok, U3_MT0, 'saddlepoint', U3_CHARGE, 'unpaired',
+        _ok_sig, U3_MT0, 'saddlepoint', U3_CHARGE, 'unpaired',
         U3_ALPHA_GRID, U3_B4_GRID, [100.0], _star, _nuc_cfg, m_s=_ms, n_jobs=U3_NJOBS)
     _u3.append((_sig[:, 0, :], _ok[:, 0, :], _mm[:, 0, :], _rs[:, 0, :]))
 
@@ -2846,7 +2902,7 @@ _stab_al = np.linspace(U3_ALPHA_GRID.min(), U3_ALPHA_GRID.max(), U3_STAB_NALPHA)
 _lo3, _hi3 = float(U3_B4_GRID.min()), float(U3_B4_GRID.max())
 _B2flav = (np.array([_B_at_930(lambda a, b: nuc_an.ud_eps_per_nB(a, b, _filt_cfg), al,
                                _lo3, _hi3) for al in _stab_al])
-           if U3_TWOFLAV else None)
+           if (U3_TWOFLAV or U3_WINDOW_ONLY) else None)
 
 set_paper_style()
 fig, axes = plt.subplots(1, len(U3_MS_LIST), figsize=(5.25 * len(U3_MS_LIST), 4.8),
@@ -2854,14 +2910,31 @@ fig, axes = plt.subplots(1, len(U3_MS_LIST), figsize=(5.25 * len(U3_MS_LIST), 4.
 pcm = None
 for _c, (_ms, (_sig, _ok, _mm, _rs)) in enumerate(zip(U3_MS_LIST, _u3)):
     ax = axes[0, _c]; ax.set_box_aspect(1)               # square panels, like Fig 8
-    pcm = ax.pcolormesh(U3_B4_GRID, U3_ALPHA_GRID, np.ma.masked_invalid(_sig),
+    # Witten line B(alpha), per m_s (needed for both the window mask and its drawing).
+    _Bw = (np.array([_B_at_930(lambda a, b: _ea_unp_P0(a, b, _ms), al, _lo3, _hi3)
+                     for al in _stab_al]) if (U3_WITTEN or U3_WINDOW_ONLY) else None)
+    # stability-window mask: keep sigma_crit only where 2-flav is unbound (right of
+    # the grey line) AND 3-flav SQM is absolutely stable (left of the green line).
+    if U3_WINDOW_ONLY:
+        _b2f = _interp_curve(_B2flav, _stab_al, U3_ALPHA_GRID, U3_B4_GRID.min())
+        _bwf = _interp_curve(_Bw, _stab_al, U3_ALPHA_GRID, U3_B4_GRID.max())
+        # fill exactly where all four criteria hold: 2-flav unbound (right of grey)
+        # AND 3-flav bound (left of green) = the window; Mmax>2 and no-rehadr are
+        # automatic -- sigma_crit is NaN on the mmax/rehadr-rejected cells so they
+        # never fill. quasi-rehad does NOT enter the mask (only outlined below).
+        _win = ((U3_B4_GRID[None, :] >= _b2f[:, None]) &
+                (U3_B4_GRID[None, :] <= _bwf[:, None]))
+        _sigp = np.where(_win, _sig, np.nan)
+    else:
+        _sigp = _sig
+    pcm = ax.pcolormesh(U3_B4_GRID, U3_ALPHA_GRID, np.ma.masked_invalid(_sigp),
                         cmap='viridis', vmin=_v3min, vmax=_v3max, shading='nearest', zorder=2)
     # (1) iso-sigma_crit contour lines (black), only levels inside this panel's range
     if U3_ISO_SIGMA:
         _lv = [l for l in (50, 100, 150, 200, 250)
-               if np.isfinite(_sig).any() and np.nanmin(_sig) <= l <= np.nanmax(_sig)]
+               if np.isfinite(_sigp).any() and np.nanmin(_sigp) <= l <= np.nanmax(_sigp)]
         if _lv:
-            _cs = ax.contour(U3_B4_GRID, U3_ALPHA_GRID, _sig, levels=_lv,
+            _cs = ax.contour(U3_B4_GRID, U3_ALPHA_GRID, _sigp, levels=_lv,
                              colors='k', linewidths=0.7, alpha=0.6, zorder=3)
             ax.clabel(_cs, fmt='%.0f', fontsize=11, inline=True)
     # (2) iso-M_max (white dashed) on the mass-relevant cells (viable + the M<2 band)
@@ -2889,23 +2962,26 @@ for _c, (_ms, (_sig, _ok, _mm, _rs)) in enumerate(zip(U3_MS_LIST, _u3)):
     if U3_TWOFLAV and _B2flav is not None and np.isfinite(_B2flav).any():
         ax.plot(_B2flav, _stab_al, color=_C3['twoflav'], lw=2.4, zorder=4.5)
         _k = np.isfinite(_B2flav)
-        ax.text(_B2flav[_k][-1], _stab_al[_k][-1], ' 2 flav.\n stability', color=_C3['twoflav'],
-                fontsize=8.5, fontweight='bold', ha='left', va='center', zorder=7)
+        ax.text(_B2flav[_k][-1], _stab_al[_k][-1], '2 flav.\nstable ', color=_C3['twoflav'],
+                fontsize=8.5, fontweight='bold', ha='right', va='center', zorder=7)
     # (5) Witten line (green) — unpaired 3-flavour SQM e/n_B|_{P=0}=930 (abs. stable left of it)
-    if U3_WITTEN:
-        _Bw = np.array([_B_at_930(lambda a, b: _ea_unp_P0(a, b, _ms), al, _lo3, _hi3)
-                        for al in _stab_al])
+    if U3_WITTEN and _Bw is not None:
         if np.isfinite(_Bw).any():
             ax.plot(_Bw, _stab_al, color=_C3['witten'], lw=2.4, zorder=4.5)
             _k = np.isfinite(_Bw)
-            ax.text(_Bw[_k][0], _stab_al[_k][0], 'SQM not\nabs. stable ', color=_C3['witten'],
-                    fontsize=8.5, fontweight='bold', ha='right', va='center', zorder=7)
+            ax.text(_Bw[_k][0], _stab_al[_k][0], ' SQM not\n abs. stable', color=_C3['witten'],
+                    fontsize=8.5, fontweight='bold', ha='left', va='center', zorder=7)
     for p in quark_param_sets:                            # mark tabulated sets at this m_s
         if abs(p['m_s'] - _ms) < 1.0:
             ax.scatter([p['B4']], [p['alpha']], s=120, marker='*',
                        c='yellow', edgecolors='k', zorder=6)
     ax.set_title(rf"$m_s={_ms:.0f}$ MeV")
     ax.set_xlabel(r'$B^{1/4}$ [MeV]'); ax.set_ylabel(r'$\alpha_s$')
+    # y-axis in units of pi/2: alpha_s = pi/2 * f (the param-set / Fig-8 convention).
+    # ticks land on nice f=0.1 multiples; labels read "pi/2 . f".
+    ax.yaxis.set_major_locator(MultipleLocator(np.pi / 2 * 0.1))
+    ax.yaxis.set_major_formatter(FuncFormatter(
+        lambda v, _: r'$0$' if abs(v) < 1e-9 else rf'$\frac{{\pi}}{{2}}\,{v/(np.pi/2):.1f}$'))
     ax.set_xlim(U3_B4_GRID.min(), U3_B4_GRID.max())
     ax.set_ylim(U3_ALPHA_GRID.min(), U3_ALPHA_GRID.max())
     panel_label(ax, f"({chr(97 + _c)})")
@@ -2934,7 +3010,7 @@ plt.show()
 #  Screening validation: W(R) for the five charge prescriptions at one point.
 # ============================================================================
 SC_T    = 20.0                      # temperature [MeV]
-SC_NBH  = 3.0                       # n_B^H / n_sat
+SC_NBH  = 5.0                       # n_B^H / n_sat
 SC_SIG  = 30.0                      # surface tension [MeV/fm^2]
 SC_PAR  = get_alphabag_custom(alpha=m5_set['alpha'], B4=m5_set['B4'], m_s=m5_set['m_s'])
 SC_Rg   = np.linspace(0.02, 12.0, 500)
