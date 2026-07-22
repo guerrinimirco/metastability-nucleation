@@ -1379,7 +1379,7 @@ for F1_SET in quark_param_sets[::-1]:
                                                  constrained_layout=True)
 
     # ---- (a) W(R): density = colour, phase = line style ----
-    _cA = OKAB_CAT[:len(F1_DENS)]                    # density = category (Okabe-Ito)
+    _cA = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1_DENS)))
     _Rg = np.linspace(0.01, 14.0, 400)
     _Wmax = 0.0
     for _ci, _x in enumerate(F1_DENS):
