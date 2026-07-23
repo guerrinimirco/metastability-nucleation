@@ -38,49 +38,72 @@ PRD_2X2_H  = 4.5
 PRD_CENTERED_W = 4.75
 
 
-def set_paper_style():
+def set_paper_style(fontsize=10, rc=None):
     """Publication rcParams: CMU Serif + Computer-Modern math (matches a LaTeX
     two-column layout), inward ticks on all four sides, frame-less legends,
-    300 dpi tight saves. All text is 10 pt = PRD body-text size, so labels,
-    ticks and legends match the surrounding paper when the figure is placed at
-    its true width (see PRD_COL_W / PRD_FULL_W)."""
-    mpl.rcParams.update({
+    300 dpi tight saves. All text defaults to 10 pt = PRD body-text size, so
+    labels, ticks and legends match the surrounding paper when the figure is
+    placed at its true width (see PRD_COL_W / PRD_FULL_W).
+
+      fontsize : base text size in pt; every text element (labels, ticks,
+                 legend, title) scales with it. Keep 10 for a figure placed at
+                 true column width; only raise it if the figure will be down-
+                 scaled in \\includegraphics (which breaks the true-width idea).
+      rc       : optional dict of extra rcParams to override on top, e.g.
+                 rc={'lines.linewidth': 1.2, 'axes.linewidth': 0.7}. The escape
+                 hatch for one-off per-figure tweaks from the notebook.
+    """
+    base = {
         'font.family': 'serif',
         'font.serif': ['CMU Serif', 'STIXGeneral', 'DejaVu Serif'],
         'mathtext.fontset': 'cm',                 # CM math to match CMU Serif
-        'font.size': 10, 'axes.labelsize': 10, 'axes.titlesize': 10,
-        'xtick.labelsize': 10, 'ytick.labelsize': 10,
-        'legend.fontsize': 10, 'legend.frameon': False,
+        'font.size': fontsize, 'axes.labelsize': fontsize,
+        'axes.titlesize': fontsize,
+        'xtick.labelsize': fontsize, 'ytick.labelsize': fontsize,
+        'legend.fontsize': fontsize, 'legend.frameon': False,
         'lines.linewidth': 1.8, 'axes.linewidth': 0.9,
         'xtick.direction': 'in', 'ytick.direction': 'in',
         'xtick.top': True, 'ytick.right': True,
         'xtick.minor.visible': True, 'ytick.minor.visible': True,
         'savefig.dpi': 300, 'savefig.bbox': 'tight',
         'axes.unicode_minus': False,              # CMU Serif lacks U+2212 minus
-    })
+    }
+    if rc:
+        base.update(rc)
+    mpl.rcParams.update(base)
 
 
-def paper_grid(layout='2x2', mode='single', placeholder=True, square=True):
-    """Build a square-panelled PRD figure with the publication style applied.
+def paper_grid(layout='2x2', mode='single', placeholder=True, square=True,
+               aspect=1.2, fontsize=10, rc=None):
+    """Build a PRD panel grid with the publication style applied.
 
-    Physics: each panel is forced to an exact 1:1 box aspect so, e.g., an M-R
-    plane or a phase diagram isn't visually stretched. The figure is built at the
-    true page width it will occupy (no LaTeX rescaling), so the 10 pt fonts from
-    set_paper_style() land as PRD body text.
+    Physics: each panel is forced to a fixed box aspect (W/H = `aspect`) so a
+    plane you must read geometrically — an M-R plane, a phase diagram — isn't
+    silently stretched. Line-vs-parameter panels read better landscape (aspect
+    ~1.2, the default); plane plots want `aspect=1.0` (square). The figure is
+    built at the true page width it will occupy (no LaTeX rescaling), so the
+    `fontsize`-pt fonts from set_paper_style() land as PRD body text.
 
     Mechanics:
-      layout : '2x2' (four panels) or '1x2' (a two-panel row = the 2×2 top row).
-      mode   : sets the figure width W -
-                 'single'   -> W = PRD_COL_W     (3.375", one column)
-                 'centered' -> W = PRD_CENTERED_W (4.75", mid-size)
-                 'double'   -> W = PRD_FULL_W     (7.0", two columns)
-               2×2 is (W, W); 1×2 is (W, W/2) so its panels match a 2×2 top row.
-      square : True (default) forces an exact 1:1 box on every panel — crisp
-               squares, but because the figsize is fixed the slack dimension
-               leaves a centring margin (harmless: savefig(bbox_inches='tight')
-               crops it). False drops the box constraint so panels stretch to
-               fill the figure (quasi-square, zero centring whitespace) — use it
-               when the on-screen/inline gap bothers you and near-square is fine.
+      layout   : '2x2' (four panels) or '1x2' (a two-panel row = the 2×2 top row).
+      mode     : sets the figure width W -
+                   'single'   -> W = PRD_COL_W     (3.375", one column)
+                   'centered' -> W = PRD_CENTERED_W (4.75", mid-size)
+                   'double'   -> W = PRD_FULL_W     (7.0", two columns)
+                 The height is derived from `aspect` so panels come out at that
+                 W/H with minimal slack: 2×2 is (W, W/aspect); 1×2 is
+                 (W, (W/2)/aspect) so its panels match a 2×2 top row.
+      aspect   : panel width/height. 1.2 (default) = mild landscape; 1.0 = square.
+      fontsize : base text size in pt (default 10 = PRD body); forwarded to
+                 set_paper_style, scales every text element.
+      rc       : optional dict of extra rcParams (e.g. line/axes widths),
+                 forwarded to set_paper_style for per-figure tweaks.
+      square   : True (default) pins every panel to the exact `aspect` box —
+                 because the figsize is fixed the slack dimension leaves a
+                 centring margin (harmless: savefig(bbox_inches='tight') crops
+                 it). False drops the box constraint so panels stretch to fill
+                 the figure (zero centring whitespace) — use it when the inline
+                 gap bothers you and near-`aspect` is fine.
 
     Panels do NOT share axes: every one carries its own x/y axis. With
     placeholder=True (default) each panel gets dummy x/y labels and a title so
@@ -94,11 +117,16 @@ def paper_grid(layout='2x2', mode='single', placeholder=True, square=True):
         raise ValueError(f"mode must be one of {sorted(widths)}, got {mode!r}")
     if layout not in ('2x2', '1x2'):
         raise ValueError(f"layout must be '2x2' or '1x2', got {layout!r}")
+    if aspect <= 0:
+        raise ValueError(f"aspect must be > 0, got {aspect!r}")
 
-    set_paper_style()
+    set_paper_style(fontsize=fontsize, rc=rc)
     w = widths[mode]
     nrows = 2 if layout == '2x2' else 1
-    figsize = (w, w) if layout == '2x2' else (w, w / 2)   # square panels either way
+    # Height follows the panel aspect: one panel is w/2 wide, so w/2/aspect tall;
+    # 2×2 stacks two of those (≈ w/aspect), 1×2 is a single row.
+    fig_h = w / aspect if layout == '2x2' else (w / 2) / aspect
+    figsize = (w, fig_h)
 
     # squeeze=False -> axes always 2-D, so callers unpack uniformly.
     # sharex/sharey default False: independent axes per the request.
@@ -109,7 +137,7 @@ def paper_grid(layout='2x2', mode='single', placeholder=True, square=True):
     fig.get_layout_engine().set(w_pad=0.02, h_pad=0.02, wspace=0.02, hspace=0.02)
     for ax in axes.flat:
         if square:
-            ax.set_box_aspect(1)    # exact square box, independent of label room
+            ax.set_box_aspect(1 / aspect)    # fixed W/H box, independent of labels
         if placeholder:
             # Dummy labels/title so the empty template looks complete - real
             # figures pass placeholder=False and set their own.
@@ -135,12 +163,15 @@ if __name__ == '__main__':
     # ponytail: smallest check that the sizing/squareness contract holds.
     mpl.use('Agg')
     _W = {'single': 3.375, 'centered': 4.75, 'double': 7.0}
-    for _lay in ('2x2', '1x2'):
-        for _m, _w in _W.items():
-            _fig, _ax = paper_grid(_lay, _m)
-            _fw, _fh = _fig.get_size_inches()
-            assert abs(_fw - _w) < 1e-9
-            assert abs(_fh - (_w if _lay == '2x2' else _w / 2)) < 1e-9
-            assert all(abs(a.get_box_aspect() - 1) < 1e-9 for a in _ax.flat)
-            plt.close(_fig)
+    for _asp in (1.0, 1.2):
+        for _lay in ('2x2', '1x2'):
+            for _m, _w in _W.items():
+                _fig, _ax = paper_grid(_lay, _m, aspect=_asp, fontsize=11)
+                _fw, _fh = _fig.get_size_inches()
+                _exp_h = _w / _asp if _lay == '2x2' else (_w / 2) / _asp
+                assert abs(_fw - _w) < 1e-9
+                assert abs(_fh - _exp_h) < 1e-9
+                assert all(abs(a.get_box_aspect() - 1 / _asp) < 1e-9 for a in _ax.flat)
+                assert abs(mpl.rcParams['font.size'] - 11) < 1e-9
+                plt.close(_fig)
     print('paper_grid self-check ok')

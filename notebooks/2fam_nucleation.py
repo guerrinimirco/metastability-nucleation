@@ -150,7 +150,7 @@ TOV_BACKEND = 'fast'
 for d in ('../output/tables_Hphase', '../output/tables_tov',
           '../output/tables_Qphase', '../output/tables_Qstar',
           '../output/tables_nucleation', '../output/mc_cfl',
-          '../output/figures'):
+          '../output/figures', '../output/figure_data'):
     os.makedirs(d, exist_ok=True)
 
 
@@ -1474,6 +1474,23 @@ for F1_SET in quark_param_sets[::-1]:
     axD.set_ylim(-60, 60); axD.set_title(rf'$Y_L^H={F1_YLH}$, $\sigma={F1_SIGMA:.0f}$ MeV/fm$^2$')
     panel_label(axD, '(d)', corner='lower')
 
+    if F1_SET is quark_param_sets[1]:                 # export (b,c,d) data for param [1]
+        _d1 = []
+        for _T in F1_TEMPS:
+            _it = _iT(_T)
+            for _ph in _PHASE_LS:
+                _o = _f1_get(_ph)
+                if _o is None:
+                    continue
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    _R = _o.R_c[:, _iYL, _it]; _WT = _o.W_c[:, _iYL, _it] / _Tg[_it]
+                    _LT = np.log10(_o.tau[:, _iYL, _it])
+                for _nb, _r, _w, _lt in zip(_nBg / n_sat, _R, _WT, _LT):
+                    _d1.append((_T, _ph, float(_nb), float(_r), float(_w), float(_lt)))
+        pd.DataFrame(_d1, columns=['T_MeV', 'phase', 'nBH_over_n0', 'R_star_fm',
+                                   'W_over_T', 'log10_tau_s']).to_csv(
+            f'../output/figure_data/fig1_bcd_{xsd_tag}_{_stag}.csv', index=False)
+        print(f'wrote fig1_bcd CSV ({_stag})')
     fig.savefig(f'../output/figures/paper_fig1_barrier_{xsd_tag}_{_stag}.pdf', bbox_inches='tight')
     plt.show()
 
@@ -1810,6 +1827,18 @@ for _s in _F2SEQ:
 axD.set_xlabel(r'$M_B$ [$M_\odot$]'); axD.set_ylabel(r'$n_B^c/n_\mathrm{sat}$')
 axD.set_xlim(0.6, 3.4); _grid(axD); panel_label(axD, '(d)', corner='lower right')
 
+_d2 = []
+for _s in _F2SEQ:
+    _a = _stable(_s['arr'])
+    _yls = _s.get('yls')
+    _Tc = (np.zeros(len(_a)) if _yls is None
+           else np.asarray(H['iso_trapped']['T'](_a[:, 2], _yls[0], _yls[1])))
+    for _row, _tc in zip(_a, _Tc):
+        _d2.append((_s['lbl'], float(_row[5]), float(_row[4]), float(_row[3]),
+                    float(_row[2]) / n_sat, float(_tc)))
+pd.DataFrame(_d2, columns=['sequence', 'M_B_Msun', 'M_Msun', 'R_km', 'nBc_over_n0', 'Tc_MeV']
+             ).to_csv(f'../output/figure_data/fig2_sequences_{xsd_tag}.csv', index=False)
+print('wrote fig2_sequences CSV')
 fig.savefig(f'../output/figures/paper_fig2_stellar_sequences_{xsd_tag}.pdf', bbox_inches='tight')
 plt.show()
 
@@ -2008,6 +2037,36 @@ _sg = [Line2D([], [], color=_sig_col[sg], ls='-', label=rf'$\sigma={int(sg)}$')
 axA.legend(handles=_ph, loc='best')
 axB.legend(handles=_sg, loc='best', title=r'$\sigma$ [MeV/fm$^2$]')
 
+_d3 = []                                              # (a,b,c) vs M_PNS
+for sg in FN2_SIGMAS:
+    for ph, ls in _phase_ls:
+        stem = f"Htrapped_{FN2_FLAVOR}_{FN2_CHARGE}_{ph}_{_tag}_s{int(sg)}"
+        if stem not in nuc_sets:
+            continue
+        itp = build_thermal_nucleation_interpolators(nuc_sets[stem])
+        _c3 = [getter(itp) for _, getter, _, _ in _abc]   # R_c, W/T, log10 tau
+        for _m, _r, _w, _lt in zip(M_seq, *_c3):
+            _d3.append((sg, ph, float(_m), float(_r), float(_w), float(_lt)))
+pd.DataFrame(_d3, columns=['sigma', 'phase', 'M_PNS_Msun', 'R_star_fm', 'W_over_T',
+                           'log10_tau_s']).to_csv(
+    f'../output/figure_data/fig3abc_vs_MPNS_{xsd_tag}_{_tag}.csv', index=False)
+_d3d = []                                             # (d) sigma_crit vs M_PNS (recomputed)
+_dc3 = 'quark_set' if FN2_D_MODE == 'quarks' else 'tau_s'
+if FN2_D_MODE == 'quarks':
+    for p in quark_param_sets:
+        _pp = get_alphabag_custom(alpha=p['alpha'], B4=p['B4'], m_s=p['m_s'])
+        for ph, ls in _phase_ls:
+            for _m, _s in zip(_Md, _sigma_crit_vs_M(_pp, p['Delta0'], ph, _nuc_cfg)):
+                _d3d.append((q_tag_of(p), ph, float(_m), float(_s)))
+else:
+    for tau in FN2_D_TAUS:
+        for ph, ls in _phase_ls:
+            for _m, _s in zip(_Md, _sigma_crit_vs_M(_params, _D0, ph,
+                                                    _dc_replace(_nuc_cfg, tau_target=tau))):
+                _d3d.append((f'{tau:g}', ph, float(_m), float(_s)))
+pd.DataFrame(_d3d, columns=[_dc3, 'phase', 'M_PNS_Msun', 'sigma_crit']).to_csv(
+    f'../output/figure_data/fig3d_sigmacrit_{xsd_tag}_{_tag}.csv', index=False)
+print('wrote fig3 CSVs (abc + d)')
 fig.savefig(f'../output/figures/paper_fig3_Rstar_Wc_tau_sigmacrit_{xsd_tag}_{_tag}.pdf',
             bbox_inches='tight')
 plt.show()
@@ -2187,6 +2246,24 @@ for FN_SET in quark_param_sets:
                          title=r'$\sigma\;[\mathrm{MeV\,fm^{-2}}]$')
     _lg.get_title()#.set_fontsize(12)                   # smaller units title
 
+    _d4 = []                                          # T_nuc(n_B^H) per snapshot/sigma/phase
+    for _pan in (PNS_T0, PNS_TMAX):
+        _YLp, _Sp = _pan['YLH'], _pan['S']
+        for sg in F6_SIGMAS:
+            for ph, ls in _PHASE_LS.items():
+                stem = f"Htrapped_{FN_FLAVOR}_{FN_CHARGE}_{ph}_{_tag}_s{int(sg)}"
+                if stem not in nuc_sets:
+                    continue
+                _grids = nuc_sets[stem].hadronic_grids
+                _iYLp = int(np.argmin(np.abs(_grids['Y_L_H'] - _YLp)))
+                _res = compute_nucleation_density(nuc_sets[stem], tau_target=FN_TAU, scan='n_B')
+                _nB, _Tn = nucleation_curve(_res, _iYLp)
+                _mk = np.isfinite(_nB) & np.isfinite(_Tn)
+                for _n, _t in zip(_nB[_mk] / n_sat, _Tn[_mk]):
+                    _d4.append((_pan['lbl'], sg, ph, float(_n), float(_t)))
+    pd.DataFrame(_d4, columns=['snapshot', 'sigma', 'phase', 'nBH_over_n0', 'T_nuc_MeV']
+                 ).to_csv(f'../output/figure_data/fig4_Tnuc_{xsd_tag}_{_tag}.csv', index=False)
+    print(f'wrote fig4_Tnuc CSV ({_tag})')
     fig.savefig(f'../output/figures/paper_fig4_Tnuc_{xsd_tag}_{_tag}.pdf',
                 bbox_inches='tight')
     plt.show()
@@ -2308,7 +2385,7 @@ def _B_unp_absstable(alpha, lo, hi):
 
 # PRD size: mode='double' (4.75" wide, 1×2). Change to 'single'/'double' to resize.
 # paper_grid('1x2') is 2 columns → assumes len(F8_SHOW) == 2 (F8_SHOW = [0, 1]).
-fig, axes = paper_grid('1x2', mode='double', placeholder=False)   # panels already square
+fig, axes = paper_grid('1x2', mode='double', placeholder=False, aspect=1.0)  # square: it's a plane map
 pcm = None
 for _c, _ia in enumerate(F8_SHOW):
     ax = axes[0, _c]
@@ -2730,7 +2807,10 @@ plt.show()
 SC_T    = 20.0                      # temperature [MeV]
 SC_NBH  = 5.0                       # n_B^H / n_sat
 SC_SIG  = 30.0                      # surface tension [MeV/fm^2]
-SC_PAR  = get_alphabag_custom(alpha=m5_set['alpha'], B4=m5_set['B4'], m_s=m5_set['m_s'])
+SC_SET  = quark_param_sets[0]       # quark parametrization (was the removed m5_set)
+SC_YL   = PNS_TMAX['YLH']           # lepton fraction Y_L^H (was m5_YL_used)
+SC_TAG  = q_tag_of(SC_SET)          # tag for the title (was m5_tag)
+SC_PAR  = get_alphabag_custom(alpha=SC_SET['alpha'], B4=SC_SET['B4'], m_s=SC_SET['m_s'])
 SC_Rg   = np.linspace(0.02, 12.0, 500)
 
 # (charge_mode, label, colour, extra kwargs) — colours echo thesis Fig. screen
@@ -2752,7 +2832,7 @@ for _ch, _lbl, _col, _kw in _SC_MODES:
     _eb = compute_energy_barrier(
         H['trapped'], SC_NBH * n_sat, SC_T, SC_SIG,
         electric_charge_mode=_ch, params=SC_PAR, flavor_mode='saddlepoint',
-        quark_phase='unpaired', Y_L_H=m5_YL_used, R_values=SC_Rg, **_kw)
+        quark_phase='unpaired', Y_L_H=SC_YL, R_values=SC_Rg, **_kw)
     ax.plot(SC_Rg, _eb.W, color=_col, lw=1.9, label=_lbl)
     if np.isfinite(_eb.W).any():
         _k = int(np.nanargmax(_eb.W))
@@ -2764,7 +2844,7 @@ for _ch, _lbl, _col, _kw in _SC_MODES:
 _eb_big = compute_energy_barrier(
     H['trapped'], SC_NBH * n_sat, SC_T, SC_SIG, electric_charge_mode='screening',
     params=SC_PAR, flavor_mode='saddlepoint', quark_phase='unpaired',
-    Y_L_H=m5_YL_used, R_values=SC_Rg, lambda_D=1e8)
+    Y_L_H=SC_YL, R_values=SC_Rg, lambda_D=1e8)
 ax.plot(SC_Rg, _eb_big.W, color='0.4', lw=1.4, ls='--',
         label=r'Screening $\lambda_D{\to}\infty$')
 
@@ -2772,7 +2852,7 @@ ax.plot(SC_Rg, _eb_big.W, color='0.4', lw=1.4, ls='--',
 _eb_scr = compute_energy_barrier(
     H['trapped'], SC_NBH * n_sat, SC_T, SC_SIG, electric_charge_mode='screening',
     params=SC_PAR, flavor_mode='saddlepoint', quark_phase='unpaired',
-    Y_L_H=m5_YL_used, R_values=SC_Rg)
+    Y_L_H=SC_YL, R_values=SC_Rg)
 ax.axhline(0, color='0.6', lw=0.7, zorder=0)
 ax.set_xlim(0, 8)
 if _wmax > 0:
@@ -2780,7 +2860,7 @@ if _wmax > 0:
 ax.set_xlabel(r'$R$ [fm]'); ax.set_ylabel(r'$W$ [MeV]')
 ax.set_title(rf"Charge prescriptions, $T={SC_T:.0f}$ MeV, "
              rf"$n_B^H/n_\mathrm{{sat}}={SC_NBH:g}$, $\sigma={SC_SIG:.0f}$ "
-             rf"MeV/fm$^2$, $\lambda_D={_eb_scr.lambda_D:.1f}$ fm — {m5_tag}")
+             rf"MeV/fm$^2$, $\lambda_D={_eb_scr.lambda_D:.1f}$ fm — {SC_TAG}")
 ax.legend(loc='upper right', fontsize=8)
 plt.show()
 
@@ -3054,11 +3134,23 @@ _t0key = min(tov_trapped, key=lambda k: abs(k[0] - 0.35) + abs(k[1] - 1.5))
 _tTkey = min(tov_trapped, key=lambda k: abs(k[0] - 0.25) + abs(k[1] - 2.0))
 _tov0, _tovT = tov_trapped[_t0key], tov_trapped[_tTkey]
 
+def _mb_to_M_interp(arr):
+    """M(M_B) on the stable branch — robust to the duplicate/non-monotone M_B the
+    CFL QS sequence can have (_binterp's cubic rejects duplicate x). Sort + dedupe."""
+    k = np.argmax(arr[:, 4]) + 1             # stable branch up to M_max (grav mass, col 4)
+    x, y = arr[:k, 5], arr[:k, 4]            # M_B (col 5) -> M (col 4)
+    o = np.argsort(x); x, y = x[o], y[o]
+    u = np.concatenate(([True], np.diff(x) > 1e-9))   # drop duplicate M_B
+    x, y = x[u], y[u]
+    if len(x) < 4:
+        return lambda q: np.nan
+    return interp1d(x, y, kind='cubic', bounds_error=False, fill_value=np.nan)
+
 _mqs_cache = {}
 def _M_QS_of_Mb(pset):                   # baryon-conserving QS remnant mass M(M_B)
     k = (pset['alpha'], pset['B4'], pset['Delta0'], pset['m_s'])
     if k not in _mqs_cache:
-        _mqs_cache[k] = _binterp(_cold_cfl_stable(pset)[0], 5, 4)   # cols 5=Mb -> 4=M
+        _mqs_cache[k] = _mb_to_M_interp(_cold_cfl_stable(pset)[0])
     return _mqs_cache[k]
 
 def _nucleates(sc, sigma):               # sigma<sigma_crit => nucleates; +inf => always
@@ -3120,8 +3212,15 @@ print(_disp.to_string(index=False))
 import os as _os
 _os.makedirs('../output/figure_data', exist_ok=True)
 tab.to_csv(f'../output/figure_data/table_outcomes_{xsd_tag}.csv', index=False)
+# Minimal LaTeX tabular by hand (pandas.to_latex needs jinja2, not installed).
+_cols = list(_disp.columns)
+_tex = ['\\begin{tabular}{l' + 'c' * (len(_cols) - 1) + '}', '\\hline\\hline',
+        ' & '.join(_cols) + ' \\\\', '\\hline']
+_tex += [' & '.join(str(_disp.iloc[_i][_c]) for _c in _cols) + ' \\\\'
+         for _i in range(len(_disp))]
+_tex += ['\\hline\\hline', '\\end{tabular}']
 with open(f'../output/figure_data/table_outcomes_{xsd_tag}.tex', 'w') as _f:
-    _f.write(_disp.to_latex(index=False, escape=False))
+    _f.write('\n'.join(_tex))
 print('\nwrote table_outcomes CSV + tex to ../output/figure_data/')
 
 
@@ -3226,4 +3325,6 @@ energy released.
 open('../output/figure_data/figures_guide.md', 'w').write(_GUIDE)
 print('wrote figures_guide.md')
 print('Claude-Science bundle in ../output/figure_data/: figures_guide.md, '
-      'table_outcomes_*.csv/.tex, fig5_sigmacrit_grid.csv (+ PDFs in ../output/figures/).')
+      'fig1_bcd_*, fig2_sequences_*, fig3abc_*/fig3d_*, fig4_Tnuc_*, '
+      'fig5_sigmacrit_grid.csv, table_outcomes_*.csv/.tex (+ PDFs in ../output/figures/). '
+      'NOTE: fig1-4 CSVs are written when you run those figure cells.')
