@@ -38,30 +38,39 @@ PRD_2X2_H  = 4.5
 PRD_CENTERED_W = 4.75
 
 
-def set_paper_style(fontsize=10, rc=None):
+def set_paper_style(fontsize=10, labelsize=None, legendsize=None, rc=None):
     """Publication rcParams: CMU Serif + Computer-Modern math (matches a LaTeX
     two-column layout), inward ticks on all four sides, frame-less legends,
     300 dpi tight saves. All text defaults to 10 pt = PRD body-text size, so
     labels, ticks and legends match the surrounding paper when the figure is
     placed at its true width (see PRD_COL_W / PRD_FULL_W).
 
-      fontsize : base text size in pt; every text element (labels, ticks,
-                 legend, title) scales with it. Keep 10 for a figure placed at
-                 true column width; only raise it if the figure will be down-
-                 scaled in \\includegraphics (which breaks the true-width idea).
-      rc       : optional dict of extra rcParams to override on top, e.g.
-                 rc={'lines.linewidth': 1.2, 'axes.linewidth': 0.7}. The escape
-                 hatch for one-off per-figure tweaks from the notebook.
+      fontsize  : base text size in pt (title + anything not overridden below).
+                  Keep 10 for a figure placed at true column width; only raise it
+                  if the figure will be down-scaled in \\includegraphics.
+      labelsize : size of the axis names AND the x/y tick numbers. Defaults to
+                  `fontsize`; set separately to shrink/grow axis text alone.
+      legendsize: size of the legend text. Defaults to `fontsize`; set separately
+                  (journals often run legends a touch smaller than axis labels).
+      rc        : optional dict of extra rcParams to override on top, e.g.
+                  rc={'axes.linewidth': 0.5}. Escape hatch for one-off tweaks.
     """
+    labelsize = fontsize if labelsize is None else labelsize
+    legendsize = fontsize if legendsize is None else legendsize
     base = {
         'font.family': 'serif',
         'font.serif': ['CMU Serif', 'STIXGeneral', 'DejaVu Serif'],
         'mathtext.fontset': 'cm',                 # CM math to match CMU Serif
-        'font.size': fontsize, 'axes.labelsize': fontsize,
-        'axes.titlesize': fontsize,
-        'xtick.labelsize': fontsize, 'ytick.labelsize': fontsize,
-        'legend.fontsize': fontsize, 'legend.frameon': False,
-        'lines.linewidth': 1.8, 'axes.linewidth': 0.9,
+        'font.size': fontsize, 'axes.titlesize': fontsize,
+        'axes.labelsize': labelsize,              # axis names
+        'xtick.labelsize': labelsize, 'ytick.labelsize': labelsize,  # tick numbers
+        'legend.fontsize': legendsize, 'legend.frameon': False,
+        # Shorter legend handle lines + tighter text gap so keys read compact.
+        'legend.handlelength': 1.4, 'legend.handletextpad': 0.5,
+        # Thin box + ticks: spines 0.7, ticks 0.6/0.5 (lighter than mpl default).
+        'lines.linewidth': 1.8, 'axes.linewidth': 0.7,
+        'xtick.major.width': 0.6, 'ytick.major.width': 0.6,
+        'xtick.minor.width': 0.5, 'ytick.minor.width': 0.5,
         'xtick.direction': 'in', 'ytick.direction': 'in',
         'xtick.top': True, 'ytick.right': True,
         'xtick.minor.visible': True, 'ytick.minor.visible': True,
@@ -74,7 +83,7 @@ def set_paper_style(fontsize=10, rc=None):
 
 
 def paper_grid(layout='2x2', mode='single', placeholder=True, square=True,
-               aspect=1.2, fontsize=10, rc=None):
+               aspect=1.2, fontsize=10, labelsize=None, legendsize=None, rc=None):
     """Build a PRD panel grid with the publication style applied.
 
     Physics: each panel is forced to a fixed box aspect (W/H = `aspect`) so a
@@ -94,10 +103,12 @@ def paper_grid(layout='2x2', mode='single', placeholder=True, square=True,
                  W/H with minimal slack: 2×2 is (W, W/aspect); 1×2 is
                  (W, (W/2)/aspect) so its panels match a 2×2 top row.
       aspect   : panel width/height. 1.2 (default) = mild landscape; 1.0 = square.
-      fontsize : base text size in pt (default 10 = PRD body); forwarded to
-                 set_paper_style, scales every text element.
+      fontsize : base text size in pt (default 10 = PRD body; title + fallback).
+      labelsize: axis-name + tick-number size (default = fontsize).
+      legendsize: legend text size (default = fontsize).
       rc       : optional dict of extra rcParams (e.g. line/axes widths),
                  forwarded to set_paper_style for per-figure tweaks.
+                 All four are forwarded to set_paper_style.
       square   : True (default) pins every panel to the exact `aspect` box —
                  because the figsize is fixed the slack dimension leaves a
                  centring margin (harmless: savefig(bbox_inches='tight') crops
@@ -120,7 +131,8 @@ def paper_grid(layout='2x2', mode='single', placeholder=True, square=True,
     if aspect <= 0:
         raise ValueError(f"aspect must be > 0, got {aspect!r}")
 
-    set_paper_style(fontsize=fontsize, rc=rc)
+    set_paper_style(fontsize=fontsize, labelsize=labelsize,
+                    legendsize=legendsize, rc=rc)
     w = widths[mode]
     nrows = 2 if layout == '2x2' else 1
     # Height follows the panel aspect: one panel is w/2 wide, so w/2/aspect tall;
@@ -166,12 +178,15 @@ if __name__ == '__main__':
     for _asp in (1.0, 1.2):
         for _lay in ('2x2', '1x2'):
             for _m, _w in _W.items():
-                _fig, _ax = paper_grid(_lay, _m, aspect=_asp, fontsize=11)
+                _fig, _ax = paper_grid(_lay, _m, aspect=_asp, fontsize=11,
+                                       labelsize=9, legendsize=8)
                 _fw, _fh = _fig.get_size_inches()
                 _exp_h = _w / _asp if _lay == '2x2' else (_w / 2) / _asp
                 assert abs(_fw - _w) < 1e-9
                 assert abs(_fh - _exp_h) < 1e-9
                 assert all(abs(a.get_box_aspect() - 1 / _asp) < 1e-9 for a in _ax.flat)
                 assert abs(mpl.rcParams['font.size'] - 11) < 1e-9
+                assert abs(mpl.rcParams['axes.labelsize'] - 9) < 1e-9
+                assert abs(mpl.rcParams['legend.fontsize'] - 8) < 1e-9
                 plt.close(_fig)
     print('paper_grid self-check ok')

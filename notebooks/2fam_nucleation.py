@@ -134,6 +134,13 @@ PHASE_LW = {'unpCFL': 2.1, 'cfl': 1.4, 'unpaired': 1.4}
 # unpaired share ONE fainter alpha so the composite reads as the emphasised phase.
 PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.6}
 
+# Paper-figure text sizes — ONE source, splatted as paper_grid(..., **PAPER_STYLE).
+#   fontsize   : title / fallback (10 = PRD body at true column width; 12 if down-scaled)
+#   labelsize  : axis names + tick numbers  (settable apart from the legend)
+#   legendsize : legend text                (journals often run it a touch smaller)
+# Legend handle lines and box/tick thickness are set once in set_paper_style().
+PAPER_STYLE = dict(fontsize=10, labelsize=10, legendsize=9)
+
 # Precomputed NICER/HESS contours live in the sibling `eos` project; the path
 # is relative to the notebooks/ cwd. Regenerate offline if the samples change.
 CONTOUR_DIR = "../../eos/plot/data/contours"
@@ -1403,7 +1410,7 @@ for F1_SET in quark_param_sets[::-1]:
 
 
     # PRD size: mode='double' (4.75" square). Change to 'single'/'double' to resize.
-    fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False)
+    fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False, **PAPER_STYLE)
 
     # ---- (a) W(R): density = colour, phase = line style ----
     _cA = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1_DENS)))
@@ -1555,7 +1562,7 @@ def _iT(T):
 _cS = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1S_SIGMAS)))
 
 # PRD size: mode='double' (4.75" square). Change to 'single'/'double' to resize.
-fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False)
+fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False, **PAPER_STYLE)
 
 # ---- (a) W(R) at fixed (T, n_B): colour = σ, line style = phase ----
 _Rg = np.linspace(0.01, 14.0, 400)
@@ -1775,7 +1782,7 @@ def _grid(ax):
 
 
 # PRD size: mode='double' (4.75" square). Change to 'single'/'double' to resize.
-fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False)
+fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False, **PAPER_STYLE)
 
 # (a) M-R.  Fix the view FIRST so the constraint fills (some reach R~21) can't
 #     auto-expand the axis and fling the labels into the margin.
@@ -1935,7 +1942,7 @@ _T_CFL   = float(T_critical(_D0))                     # CFL undefined above this
 
 # PRD size knob: mode='single'(3.375") / 'centered'(4.75") / 'double'(7.0"), all square.
 # No sharex (new mode) — every panel carries its own x-axis + label.
-fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False)
+fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False, **PAPER_STYLE)
 _abc_axes = [axA, axB, axC]
 
 # nearest table Y_L to FN2_YL (the getters read the interpolators at _YL)
@@ -2193,7 +2200,7 @@ for FN_SET in quark_param_sets:
 
     # PRD size: mode='double' (4.75" wide, half height → panels match a 2×2 top row).
     # Change to 'single'/'double' to resize.
-    fig, axes = paper_grid('1x2', mode='double', placeholder=False)
+    fig, axes = paper_grid('1x2', mode='double', placeholder=False, **PAPER_STYLE)
     axes = axes[0]      # paper_grid axes are 2-D (1×2); flatten to a 1-D row of 2 panels
     # NOTE: no sharey — both panels carry their own T_nuc axis (same ylim set below)
     for ax, pan in zip(axes, _panels):
@@ -2385,7 +2392,7 @@ def _B_unp_absstable(alpha, lo, hi):
 
 # PRD size: mode='double' (4.75" wide, 1×2). Change to 'single'/'double' to resize.
 # paper_grid('1x2') is 2 columns → assumes len(F8_SHOW) == 2 (F8_SHOW = [0, 1]).
-fig, axes = paper_grid('1x2', mode='double', placeholder=False, aspect=1.0)  # square: it's a plane map
+fig, axes = paper_grid('1x2', mode='double', placeholder=False, aspect=1.0, **PAPER_STYLE)  # square: it's a plane map
 pcm = None
 for _c, _ia in enumerate(F8_SHOW):
     ax = axes[0, _c]
@@ -2477,7 +2484,7 @@ _f8b_curves = nuc_an.replay_accepted(_SIG8[_al_idx], _al8[_al_idx], _B48, _D08,
 _norm8 = plt.Normalize(vmin=_vmin8, vmax=_vmax8)     # == Fig 5 heatmap colour scale
 _cmap8 = plt.cm.viridis
 
-fig, _axes = paper_grid('1x2', mode='double', placeholder=False)
+fig, _axes = paper_grid('1x2', mode='double', placeholder=False, **PAPER_STYLE)
 axMR, axP = _axes[0]                     # paper_grid axes are 2-D (1×2) → row 0
 # (a) M-R: hadronic reference (black) + 2 M_sun guide; CFL curves coloured by σ_crit
 axMR.plot(tov_cold[:, 3], tov_cold[:, 4], 'k-', lw=2, label='Hadronic (T=0)', zorder=5)
@@ -2971,7 +2978,7 @@ _D01   = SP1_SET['Delta0']
 _col1  = {sg: mpl.cm.viridis(t) for sg, t in
           zip(SP1_SIGMAS, np.linspace(0.15, 0.85, len(SP1_SIGMAS)))}
 
-fig, ((axR, axW), (axN, axY)) = paper_grid('2x2', mode='double', placeholder=False)
+fig, ((axR, axW), (axN, axY)) = paper_grid('2x2', mode='double', placeholder=False, **PAPER_STYLE)
 _P1 = [(axR, 'R', r'$R_*$ [fm]', 'linear'), (axW, 'WoverT', r'$W_*/T$', 'log'),
        (axN, 'NB', r'$N_B^{Q*}$', 'log'), (axY, 'YS', r'$Y_S^H$', 'linear')]
 for sg in SP1_SIGMAS:
@@ -3037,7 +3044,7 @@ _rows2 = [_droplet_obs(sc, _Hpt2, _Tc2, SP2_FLAVOR, SP2_CHARGE, SP2_PHASE,
           for al, B4, D0, sc in _cells]
 print(f"Plot 2a: {len(_cells)} viable cells")
 
-fig, ((axR, axW), (axN, axY)) = paper_grid('2x2', mode='double', placeholder=False)
+fig, ((axR, axW), (axN, axY)) = paper_grid('2x2', mode='double', placeholder=False, **PAPER_STYLE)
 _P2 = [(axR, 'R', r'$R_*$ [fm]', 'linear'), (axW, 'WoverT', r'$W_*/T$', 'log'),
        (axN, 'NB', r'$N_B^{Q*}$', 'log'), (axY, 'YS', r'$Y_S^H$', 'linear')]
 _sm2 = None
@@ -3081,7 +3088,7 @@ _D02b = SP2B_SET['Delta0']
 _col2b = {sg: mpl.cm.viridis(t) for sg, t in
           zip(SP2B_SIGMAS, np.linspace(0.15, 0.85, len(SP2B_SIGMAS)))}
 
-fig, ((axR, axW), (axN, axY)) = paper_grid('2x2', mode='double', placeholder=False)
+fig, ((axR, axW), (axN, axY)) = paper_grid('2x2', mode='double', placeholder=False, **PAPER_STYLE)
 _P2b = [(axR, 'R', r'$R_*$ [fm]', 'linear'), (axW, 'WoverT', r'$W_*/T$', 'log'),
         (axN, 'NB', r'$N_B^{Q*}$', 'log'), (axY, 'YS', r'$Y_S^H$', 'linear')]
 for sg in SP2B_SIGMAS:
