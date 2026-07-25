@@ -57,8 +57,6 @@ import sys, os
 # ─── Install the packages ─────────────────────────────────────────
 # !{sys.executable} -m pip install --no-deps --force-reinstall git+https://github.com/guerrinimirco/eos.git --quiet
 print("eos package loaded successfully!")
-# NOTE: force-reinstall pulls origin/main — PUSH local commits first or this
-# reinstalls stale GitHub code (repo is metastability-nucleation, not nucleation).
 # !{sys.executable} -m pip install --no-deps --force-reinstall git+https://github.com/guerrinimirco/metastability-nucleation.git --quiet
 print("nucleation package loaded successfully!")
 
@@ -139,7 +137,7 @@ PHASE_ALPHA = {'unpCFL': 1.0, 'cfl': 0.6, 'unpaired': 0.6}
 #   labelsize  : axis names + tick numbers  (settable apart from the legend)
 #   legendsize : legend text                (journals often run it a touch smaller)
 # Legend handle lines and box/tick thickness are set once in set_paper_style().
-PAPER_STYLE = dict(fontsize=10, labelsize=10, legendsize=9)
+PAPER_STYLE = dict(fontsize=11, labelsize=11, legendsize=9, aspect=1.1)
 
 # Precomputed NICER/HESS contours live in the sibling `eos` project; the path
 # is relative to the notebooks/ cwd. Regenerate offline if the samples change.
@@ -277,9 +275,9 @@ params = create_custom_parametrization(
 #  nucleation) loops over all sets, tagging files/keys via q_tag_of(p).
 # =============================================================================
 quark_param_sets = [
+    dict(alpha=0.1*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
     dict(alpha=0.08*np.pi/2, B4=158.0, Delta0=157.0, m_s=100.0),
     #dict(alpha=0.3*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
-    dict(alpha=0.1*np.pi/2, B4=145.0, Delta0=80.0, m_s=100.0),
     #dict(alpha=0.3*np.pi/2, B4=165.0, Delta0=200.0, m_s=100.0),
     #dict(alpha=0.3*np.pi/2, B4=150.0, Delta0=100.0, m_s=100.0),
     #dict(alpha=0.3*np.pi/2, B4=160.0, Delta0=150.0, m_s=100.0),
@@ -1368,7 +1366,7 @@ set_paper_style()      # publication rcParams (nucleation.analysis.figure.style)
 # ============================================================================
 # One figure per quark parametrization. Reverse order so set[0]'s helper
 # bindings (_params, _f1_get, _ref, ...) persist for the sigma-sweep cell below.
-for F1_SET in quark_param_sets[::-1]:
+for F1_SET in [quark_param_sets[0]]:
     F1_FLAVOR = 'saddlepoint'                        # 'frozen' | 'saddlepoint'
     F1_CHARGE = 'coulomb_minimize'                   # 'lcn' | 'gcn' | 'coulomb_minimize'
     F1_YLH    = 0.25
@@ -1429,7 +1427,8 @@ for F1_SET in quark_param_sets[::-1]:
                 _k = int(np.nanargmax(_eb.W))
                 if _ph != 'unpaired':                                   # no marker on unpaired
                     axA.plot(_Rg[_k], _eb.W[_k], 'o', ms=6, color=_cA[_ci], mec=_cA[_ci],
-                             mfc=(_cA[_ci] if _PHASE_FILL[_ph] else 'white'), zorder=5)
+                             mfc=(_cA[_ci] if _PHASE_FILL[_ph] else 'white'),
+                             zorder=(6 if _PHASE_FILL[_ph] else 5))  # solid dots on top of empty
                 _Wmax = max(_Wmax, float(_eb.W[_k]))
     # shade R <= R_Delta (unpCFL->CFL crossover radius R_x at this T)
     _Rdelta = _f1_Rx(F1_TW)
@@ -1519,7 +1518,7 @@ for F1_SET in quark_param_sets[::-1]:
 #  Self-contained (mirrors Fig 1): pick the quark parametrization here — no
 #  longer inherits the Fig-1 loop's leaked bindings.
 # ============================================================================
-F1_SET     = quark_param_sets[1]       # <-- SELECT quark parametrization (also sets Delta0)
+F1_SET     = quark_param_sets[0]       # <-- SELECT quark parametrization (also sets Delta0)
 F1_FLAVOR  = 'saddlepoint'             # 'frozen' | 'saddlepoint'
 F1_CHARGE  = 'coulomb_minimize'        # 'lcn' | 'gcn' | 'coulomb_minimize'
 F1_YLH     = 0.25
@@ -1646,8 +1645,8 @@ plt.show()
 # ============================================================================
 #  Figure 2.  Knobs.
 # ============================================================================
-F2_SET   = quark_param_sets[1]                   # quark parametrization (ref plot + Delta0)
-_QS_GREENS = ['#74c476', '#31a354', '#006d2c']   # QS star colours, per quark set (light->dark)
+F2_SET   = quark_param_sets[0]                   # quark parametrization (ref plot + Delta0)
+_QS_GREENS = [ '#31a354', '#006d2c']   # QS star colours, per quark set (light->dark)
 
 # fonts come from set_paper_style() (10 pt = PRD body), same as every other paper
 # figure — do NOT override here or Fig 2 desyncs (this made PSR/HESS look tiny).
@@ -1673,9 +1672,11 @@ def _cold_cfl_stable(pset):
     return st, Mmax
 
 
-# QS = cold CFL star for the single reference quark parametrization (F2_SET).
+# QS = cold CFL star, one curve PER quark parametrization (both sets shown).
+# Set F2_QS_SETS = [F2_SET] to fall back to a single QS branch.
+F2_QS_SETS = list([quark_param_sets[0]])
 _qs_tov = []
-for _p in [F2_SET]:
+for _p in F2_QS_SETS:
     _st, _mmax = _cold_cfl_stable(_p)
     _qs_tov.append((_p, _st))
     print(f"CFL star ({q_tag_of(_p)}): M_max = {_mmax:.3f} M_sun")
@@ -1696,7 +1697,8 @@ _F2SEQ = [
 ]
 for _i, (_p, _st) in enumerate(_qs_tov):
     _F2SEQ.append(dict(
-        arr=_st, c='#238b45', lbl='QS',
+        arr=_st, c=_QS_GREENS[_i % len(_QS_GREENS)],       # one green per set
+        lbl=(f'QS ({q_tag_of(_p)})' if len(_qs_tov) > 1 else 'QS'),
         a=(0.85, 0.15, 0.08, 'left', 'bottom'),
         b=(0.9, 0.05, -0.04, 'left', 'top'),
         d=(0.92, 0.03, 0.2, 'left', 'bottom'),
@@ -1881,7 +1883,7 @@ FN2_CHARGE          = 'coulomb_minimize'
 FN2_TAU             = None               # s (target line on the log10 tau panel)
 FN2_MVERT           = []         # masses for the vertical (red) guides
 # ---- SELECT what to plot ----
-FN2_SET             = quark_param_sets[1]                 # <-- quark parametrization (panels a–c)
+FN2_SET             = quark_param_sets[0]                 # <-- quark parametrization (panels a–c)
 FN2_SIGMAS          = list([80,100,150])                    # <-- σ SET drawn in a–c (colour); edit freely, e.g. [50, 100, 200]
 FN2_VGUIDE_COL      = STANDARD_COLORS['Red']              # vertical mass-guide colour
 # ---- panel (d): σ_crit(τ=target) vs M_PNS ----
@@ -2025,12 +2027,21 @@ axD.set_ylabel(r'$\sigma_{\rm crit}$ [MeV/fm$^2$]')
 axD.set_ylim(50, 200)                                  # (d) σ_crit range — edit here
 axD.legend(handles=_d_handles, loc='best', title=_d_title, fontsize=8)
 
+# τ reference levels on panel (c): horizontal lines at log10(τ) for τ = 1 ms / 1 s /
+# 100 s, coloured to MATCH panel (d)'s τ colouring (same plasma-over-FN2_D_TAUS
+# recipe), dash-dot + faded so they read as guides, not data.
+_tau_ref_col = {t: mpl.cm.plasma(u) for t, u in
+                zip(FN2_D_TAUS, np.linspace(0.15, 0.8, max(len(FN2_D_TAUS), 2)))}
+for _t in FN2_D_TAUS:
+    axC.axhline(np.log10(_t), color=_tau_ref_col[_t], ls='-', lw=1.2,
+                alpha=0.4, zorder=1)
+
 # common cosmetics: red vertical mass guides, xlim, per-panel x-label, panel tag (no grid)
 for _lab, ax in zip(('(a)', '(b)', '(c)', '(d)'), (axA, axB, axC, axD)):
     ax.set_xlim(0.7, M_max)
     ax.set_xlabel(r'$M_{\rm PNS}\ [M_\odot]$')         # every panel labelled (no sharex)
     for mv in FN2_MVERT:                       # dashed: fixed M_PNS
-        ax.axvline(mv, color=FN2_VGUIDE_COL, ls='--', lw=1.0, zorder=1)
+        ax.axvline(mv, color=FN2_VGUIDE_COL, ls='-', lw=1.0, zorder=1)
     for md in M_dot:                           # dotted: Mb-matched to cold
         if np.isfinite(md):
             ax.axvline(md, color=FN2_VGUIDE_COL, ls=':', lw=1.0, zorder=1)
@@ -2042,7 +2053,7 @@ _ph = [Line2D([], [], color='k', ls=ls, label=lbl)
 _sg = [Line2D([], [], color=_sig_col[sg], ls='-', label=rf'$\sigma={int(sg)}$')
        for sg in FN2_SIGMAS]
 axA.legend(handles=_ph, loc='best')
-axB.legend(handles=_sg, loc='best', title=r'$\sigma$ [MeV/fm$^2$]')
+axA.legend(handles=_sg, loc='upper right', title=r'$\sigma$ [MeV/fm$^2$]')
 
 _d3 = []                                              # (a,b,c) vs M_PNS
 for sg in FN2_SIGMAS:
@@ -2082,17 +2093,20 @@ plt.show()
 # %% [markdown]
 # ### Paper Figure 4 — $T_{\rm nuc}(n_B^H)$ nucleation conditions
 #
-# One figure per quark parametrization. $\tau=\tau_{\rm target}$ curves in
-# $(n_B^H, T)$, one line per $\sigma$ (colour) and phase (line style). The
-# stellar isentrope is drawn in the snapshot colour (orange $t_0$, red
-# $t_{T_\mathrm{max}}$); markers on it mark the PNS central density (filled +
-# labelled: fixed $M=1,1.2,1.4,1.6$, star = $M_{\max}$; open: $M_b$-matched to a
-# cold star). **(a)** $t_0$: $Y_L^H=0.35,\,S_H=1.5$   **(b)** $t_{T_\mathrm{max}}$: $Y_L^H=0.25,\,S_H=2$.
+# One 2×2 figure comparing the TWO quark parametrizations: **rows = set**
+# (Set A top, Set B bottom), **columns = snapshot** ($t_0$ left, $t_{T_\mathrm{max}}$
+# right). $\tau=\tau_{\rm target}$ curves in $(n_B^H, T)$, one line per $\sigma$
+# (colour) and phase (line style). The stellar isentrope is drawn in the snapshot
+# colour (orange $t_0$, red $t_{T_\mathrm{max}}$); markers on it mark the PNS
+# central density (filled + labelled: fixed $M=1,1.2,1.4,1.6$, star = $M_{\max}$;
+# open: $M_b$-matched to a cold star). **(a,b)** Set A, **(c,d)** Set B; snapshots
+# $t_0$: $Y_L^H=0.35,\,S_H=1.5$ and $t_{T_\mathrm{max}}$: $Y_L^H=0.25,\,S_H=2$.
 
 # %%
 # ============================================================================
-#  Figure 4.  T_nuc(n_B^H) nucleation-condition curves — ONE figure per quark set.
-#    Two panels: (a) t_0 (Y_L^H=0.35, S_H=1.5),  (b) t_Tmax (Y_L^H=0.25, S_H=2.0).
+#  Figure 4.  T_nuc(n_B^H) nucleation-condition curves — ONE 2×2, two quark sets.
+#    rows = set (A top, B bottom); cols = snapshot: t_0 (Y_L^H=0.35, S_H=1.5) and
+#    t_Tmax (Y_L^H=0.25, S_H=2.0). Panels (a,b)=Set A, (c,d)=Set B.
 #    colour = sigma;  line style: unpaired ':', CFL '--', unpCFL '-'.
 #    isentrope T(n_B^H) dash-dot in the snapshot colour (orange t_0, red t_Tmax).
 #    Markers ON the isentrope mark the PNS central density n_Bc (Fig-2 c/d style):
@@ -2112,8 +2126,8 @@ FN_TAU    = 1e-3                         # s  (tau_target)
 # set's own σ list, rebuilt inside the loop.
 F6_SIGMAS_DEFAULT = [50, 100, 150]
 F6_SIGMAS_BY_SET  = {q_tag_of(p): list(F6_SIGMAS_DEFAULT) for p in quark_param_sets}
-F6_SIGMAS_BY_SET[q_tag_of(quark_param_sets[0])] = [150, 200, 250]
-F6_SIGMAS_BY_SET[q_tag_of(quark_param_sets[1])] = [50, 100, 150]
+F6_SIGMAS_BY_SET[q_tag_of(quark_param_sets[1])] = [150, 200, 250]
+F6_SIGMAS_BY_SET[q_tag_of(quark_param_sets[0])] = [50, 100, 150]
 FN_CUT_CFL_ABOVE_TC = True               # mask the CFL curve where T_nuc > T_CFL (gap vanishes above Tc)
 from eos.alphabag.thermodynamics_quarks import T_critical   # same Tc as the CFL EoS gap
 
@@ -2188,75 +2202,93 @@ def _iso_markers(ax, tov_tr, T_iso, color):
         ax.plot(*sw, '*', ms=13, color='white', mec=color, mew=1.1, zorder=7)
     _mark_pair(ax, [sf, sw], r"$M_{\max}$", color)
 
-# one figure per quark parametrization
-for FN_SET in quark_param_sets:
-    _tag    = q_tag_of(FN_SET)
-    F6_SIGMAS = F6_SIGMAS_BY_SET.get(_tag, F6_SIGMAS_DEFAULT)    # per-set σ selection
-    _sig_col  = {sg: mpl.cm.viridis(t) for sg, t in             # colour = σ, per set
+# ONE 2×2 figure: rows = quark parametrization (Set A top, Set B bottom),
+# columns = snapshot (t_0 left, t_Tmax right). colour = σ (per-set list/palette),
+# line style = phase; each panel titled with its set.
+_F4_SETS = [('Set A', quark_param_sets[0]), ('Set B', quark_param_sets[1])]
+
+
+def _draw_f4_panel(ax, FN_SET, pan, panel_lab, set_label):
+    """Draw one T_nuc(n_B^H) panel for (quark set, snapshot); return (σ→colour, σ list)
+    so the caller can build that row's σ legend (the σ palette differs per set)."""
+    _tag      = q_tag_of(FN_SET)
+    F6_SIGMAS = F6_SIGMAS_BY_SET.get(_tag, F6_SIGMAS_DEFAULT)      # per-set σ selection
+    _sig_col  = {sg: mpl.cm.viridis(t) for sg, t in               # colour = σ, per set
                  zip(F6_SIGMAS, np.linspace(0.15, 0.85, len(F6_SIGMAS)))}
-    _T_CFL  = float(T_critical(FN_SET['Delta0']))   # CFL Tc = 0.57*2^(1/3)*Delta0 [MeV]
-    _panels = [dict(**PNS_T0,   lab='(a)'),         # left  = t_0
-               dict(**PNS_TMAX, lab='(b)')]         # right = t_Tmax
+    _T_CFL    = float(T_critical(FN_SET['Delta0']))               # CFL Tc [MeV]
+    YL, S, col = pan['YLH'], pan['S'], pan['color']
+    YL_used = None
+    for sg in F6_SIGMAS:
+        for ph, ls in _PHASE_LS.items():              # unpCFL drawn last -> on top
+            stem = f"Htrapped_{FN_FLAVOR}_{FN_CHARGE}_{ph}_{_tag}_s{int(sg)}"
+            if stem not in nuc_sets:
+                continue
+            grids   = nuc_sets[stem].hadronic_grids
+            iYL     = int(np.argmin(np.abs(grids['Y_L_H'] - YL)))
+            YL_used = grids['Y_L_H'][iYL]
+            res = compute_nucleation_density(nuc_sets[stem], tau_target=FN_TAU, scan='n_B')
+            nB, T = nucleation_curve(res, iYL)
+            m = np.isfinite(nB) & np.isfinite(T)
+            if FN_CUT_CFL_ABOVE_TC and ph == 'cfl':
+                m &= (T <= _T_CFL)                    # CFL undefined above Tc
+            if m.any():
+                ax.plot(nB[m] / n_sat, T[m], color=_sig_col[sg], ls=ls,
+                        lw=_PHASE_LW[ph], alpha=_PHASE_ALPHA[ph])
+    ax.set_xlim(0.5, 12); ax.set_ylim(1, 80)          # T [MeV], n_B^H/n_sat
 
-    # PRD size: mode='double' (4.75" wide, half height → panels match a 2×2 top row).
-    # Change to 'single'/'double' to resize.
-    fig, axes = paper_grid('1x2', mode='double', placeholder=False, **PAPER_STYLE)
-    axes = axes[0]      # paper_grid axes are 2-D (1×2); flatten to a 1-D row of 2 panels
-    # NOTE: no sharey — both panels carry their own T_nuc axis (same ylim set below)
-    for ax, pan in zip(axes, _panels):
-        YL, S, col = pan['YLH'], pan['S'], pan['color']
-        YL_used = None
-        for sg in F6_SIGMAS:
-            for ph, ls in _PHASE_LS.items():          # unpCFL drawn last -> on top
-                stem = f"Htrapped_{FN_FLAVOR}_{FN_CHARGE}_{ph}_{_tag}_s{int(sg)}"
-                if stem not in nuc_sets:
-                    continue
-                grids   = nuc_sets[stem].hadronic_grids
-                iYL     = int(np.argmin(np.abs(grids['Y_L_H'] - YL)))
-                YL_used = grids['Y_L_H'][iYL]
-                res = compute_nucleation_density(nuc_sets[stem],
-                                                 tau_target=FN_TAU, scan='n_B')
-                nB, T = nucleation_curve(res, iYL)
-                m = np.isfinite(nB) & np.isfinite(T)
-                if FN_CUT_CFL_ABOVE_TC and ph == 'cfl':
-                    m &= (T <= _T_CFL)                # CFL undefined above Tc
-                if m.any():
-                    ax.plot(nB[m] / n_sat, T[m], color=_sig_col[sg], ls=ls,
-                            lw=_PHASE_LW[ph], alpha=_PHASE_ALPHA[ph])
+    # isentrope T(n_B^H) at (Y_L, S), solid in the snapshot colour + PNS markers.
+    YL_iso = YL if YL_used is None else float(YL_used)
+    T_iso  = lambda nBc: H['iso_trapped']['T'](nBc, YL_iso, S)
+    tov_tr = _tov_trapped_seq(YL_iso, S)
+    nBc_mx = tov_tr[int(np.argmax(tov_tr[:, _M])), _NBC]          # M_max central density
+    nB_iso = np.linspace(0.5 * n_sat, nBc_mx, 200)
+    ax.plot(nB_iso / n_sat, T_iso(nB_iso), color=col, ls='-', lw=1.8, zorder=3)
+    _iso_markers(ax, tov_tr, T_iso, col)
 
-        ax.set_xlim(0.5, 12); ax.set_ylim(1, 80)      # T [MeV], n_B^H/n_sat
+    ax.set_xlabel(r'$n_B^H / n_{\rm sat}$')
+    ax.set_ylabel(r'$T_{\rm nuc}$ [MeV]')
+    ax.set_title(rf"{pan['lbl']},  $Y_L^H={YL_iso:.2f}$,  {set_label}")
+    # NOTE deliberately no set_box_aspect here: panel shape is paper_grid's job
+    # (see the call below). Pinning it here fought PAPER_STYLE's aspect and the
+    # width budgeted for the wider shape turned into a gutter between the panels.
+    panel_label(ax, panel_lab)
+    return _sig_col, F6_SIGMAS
 
-        # isentrope T(n_B^H) at (Y_L, S), solid in the snapshot colour + PNS markers.
-        # Drawn from 0.5 n_sat up to the PNS M_max central density (branch tip).
-        YL_iso = YL if YL_used is None else float(YL_used)
-        T_iso  = lambda nBc: H['iso_trapped']['T'](nBc, YL_iso, S)
-        tov_tr = _tov_trapped_seq(YL_iso, S)
-        nBc_mx = tov_tr[int(np.argmax(tov_tr[:, _M])), _NBC]     # M_max central density
-        nB_iso = np.linspace(0.5 * n_sat, nBc_mx, 200)
-        ax.plot(nB_iso / n_sat, T_iso(nB_iso), color=col, ls='-', lw=1.8, zorder=3)
-        _iso_markers(ax, tov_tr, T_iso, col)
 
-        ax.set_xlabel(r'$n_B^H / n_{\rm sat}$')
-        ax.set_ylabel(r'$T_{\rm nuc}$ [MeV]')         # on BOTH panels (incl. right)
-        ax.set_title(rf"{pan['lbl']}:  $Y_L^H={YL_iso:.2f}$,  $S_H={S:g}$")
-        ax.set_box_aspect(1)                          # square panels
-        panel_label(ax, pan['lab'])
+# PRD size: mode='double' (7.0" wide, 2×2). rows = set, cols = snapshot.
+# square=False: don't pin each panel's W/H, let it fill its slot, so leftover width
+# becomes panel instead of gutter. aspect=1.0 makes the figure 7.0x7.0", which lands
+# the unpinned panels at W/H ~ 1.06 -- square to the eye, with no empty slack. The
+# ~0.6" left between the columns is the right column's y-label + tick numbers (ink,
+# not waste); dropping those duplicated inner labels would take it to ~0.15".
+# To go back to exactly-square panels: drop square=False (costs ~0.2" of gutter).
+fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double', placeholder=False,
+                                           square=False,
+                                           **(PAPER_STYLE | {'aspect': 1.0}))
+(_nameA, _setA), (_nameB, _setB) = _F4_SETS
+_scA, _sgsA = _draw_f4_panel(axA, _setA, PNS_T0,   '(a)', _nameA)   # Set A, t_0
+_draw_f4_panel(axB, _setA, PNS_TMAX, '(b)', _nameA)                 # Set A, t_Tmax
+_scB, _sgsB = _draw_f4_panel(axC, _setB, PNS_T0,   '(c)', _nameB)   # Set B, t_0
+_draw_f4_panel(axD, _setB, PNS_TMAX, '(d)', _nameB)                 # Set B, t_Tmax
 
-    # Legends: phase (line style, Fig-1 lw/alpha) top-right of (a); sigma right of
-    # (b) — number-only labels under a small units title.
-    _ph_handles = [Line2D([], [], color='k', ls=_PHASE_LS[p], lw=_PHASE_LW[p],
-                          alpha=_PHASE_ALPHA[p], label=_PHASE_LBL[p]) for p in _PHASE_LS]
-    _sig_handles = [Line2D([], [], color=_sig_col[sg], ls='-', label=f'{int(sg)}')
-                    for sg in F6_SIGMAS]
-    axes[0].legend(handles=_ph_handles, loc='upper right')
-    _lg = axes[1].legend(handles=_sig_handles, loc='upper right',
-                         title=r'$\sigma\;[\mathrm{MeV\,fm^{-2}}]$')
-    _lg.get_title()#.set_fontsize(12)                   # smaller units title
+# Legends: phase (line style) on (a); per-row σ legend on the right panel of each
+# row (b, d) — the σ palette differs per set.
+_ph_handles = [Line2D([], [], color='k', ls=_PHASE_LS[p], lw=_PHASE_LW[p],
+                      alpha=_PHASE_ALPHA[p], label=_PHASE_LBL[p]) for p in _PHASE_LS]
+axA.legend(handles=_ph_handles, loc='upper right')
+for _ax, _sc, _sgs in ((axB, _scA, _sgsA), (axD, _scB, _sgsB)):
+    _sig_handles = [Line2D([], [], color=_sc[sg], ls='-', label=f'{int(sg)}') for sg in _sgs]
+    _ax.legend(handles=_sig_handles, loc='upper right',
+               title=r'$\sigma\;[\mathrm{MeV\,fm^{-2}}]$')
 
-    _d4 = []                                          # T_nuc(n_B^H) per snapshot/sigma/phase
+# CSV: T_nuc(n_B^H) for both sets × snapshots × σ × phase (one combined file).
+_d4 = []
+for _setname, _pset in _F4_SETS:
+    _tag = q_tag_of(_pset)
+    _F6  = F6_SIGMAS_BY_SET.get(_tag, F6_SIGMAS_DEFAULT)
     for _pan in (PNS_T0, PNS_TMAX):
-        _YLp, _Sp = _pan['YLH'], _pan['S']
-        for sg in F6_SIGMAS:
+        _YLp = _pan['YLH']
+        for sg in _F6:
             for ph, ls in _PHASE_LS.items():
                 stem = f"Htrapped_{FN_FLAVOR}_{FN_CHARGE}_{ph}_{_tag}_s{int(sg)}"
                 if stem not in nuc_sets:
@@ -2267,13 +2299,13 @@ for FN_SET in quark_param_sets:
                 _nB, _Tn = nucleation_curve(_res, _iYLp)
                 _mk = np.isfinite(_nB) & np.isfinite(_Tn)
                 for _n, _t in zip(_nB[_mk] / n_sat, _Tn[_mk]):
-                    _d4.append((_pan['lbl'], sg, ph, float(_n), float(_t)))
-    pd.DataFrame(_d4, columns=['snapshot', 'sigma', 'phase', 'nBH_over_n0', 'T_nuc_MeV']
-                 ).to_csv(f'../output/figure_data/fig4_Tnuc_{xsd_tag}_{_tag}.csv', index=False)
-    print(f'wrote fig4_Tnuc CSV ({_tag})')
-    fig.savefig(f'../output/figures/paper_fig4_Tnuc_{xsd_tag}_{_tag}.pdf',
-                bbox_inches='tight')
-    plt.show()
+                    _d4.append((_setname, _tag, _pan['lbl'], sg, ph, float(_n), float(_t)))
+pd.DataFrame(_d4, columns=['set', 'quark_tag', 'snapshot', 'sigma', 'phase',
+                           'nBH_over_n0', 'T_nuc_MeV']
+             ).to_csv(f'../output/figure_data/fig4_Tnuc_{xsd_tag}.csv', index=False)
+print('wrote fig4_Tnuc CSV (both sets)')
+fig.savefig(f'../output/figures/paper_fig4_Tnuc_{xsd_tag}.pdf', bbox_inches='tight')
+plt.show()
 
 
 # %% [markdown]
@@ -2392,7 +2424,7 @@ def _B_unp_absstable(alpha, lo, hi):
 
 # PRD size: mode='double' (4.75" wide, 1×2). Change to 'single'/'double' to resize.
 # paper_grid('1x2') is 2 columns → assumes len(F8_SHOW) == 2 (F8_SHOW = [0, 1]).
-fig, axes = paper_grid('1x2', mode='double', placeholder=False, aspect=1.0, **PAPER_STYLE)  # square: it's a plane map
+fig, axes = paper_grid('1x2', mode='double', placeholder=False, fontsize=11, labelsize=11, legendsize=9, aspect=1.0)  # square: it's a plane map
 pcm = None
 for _c, _ia in enumerate(F8_SHOW):
     ax = axes[0, _c]
@@ -2475,7 +2507,7 @@ plt.show()
 # ============================================================================
 set_paper_style()
 F8B_ALPHAS     = [0, 1, 2]              # α_s slice indices to include (into _al8)
-F8B_MAX_CURVES = 300                    # even subsample of viable cells (None = all)
+F8B_MAX_CURVES = None                    # even subsample of viable cells (None = all)
 # viable (finite-σ_crit) cells across the chosen α slices — same grid as Fig 5
 _al_idx  = [i for i in F8B_ALPHAS if i < len(_al8)]
 _f8b_curves = nuc_an.replay_accepted(_SIG8[_al_idx], _al8[_al_idx], _B48, _D08,
@@ -3120,19 +3152,27 @@ plt.show()
 # $(Y_L^H=0.25,\,S_H=2.0)$ columns $M^{\rm PNS}, n_{B,c}^H, Y_{S,c}^H$; **remnant**
 # type / mass / conversion energy. Decision: at each snapshot compute
 # $\sigma_{\rm crit}$ (τ=`TAB_TAU`) at the centre; **σ<σ_crit ⇒ nucleates**. Converts
-# at $t_0$ if σ<σ_crit(t_0), else at $t_Tmax$ if σ<σ_crit(t_Tmax), else stays NS.
+# at $t_0$ if σ<σ_crit(t_0) (then the $t_{T\max}$ columns read '--' — that snapshot
+# is never reached), else at $t_Tmax$ if σ<σ_crit(t_Tmax), else stays NS. A **BH**
+# forms when the fixed-$M_B$ star can't be held: promptly if $M^{t_0}>M_{\max}^{t_0}$,
+# or after deleptonization when $M_B>M_{B,\max}^{t_{T\max}}$ (so the maximal PNS at
+# $t_0$ collapses unless small σ converts it first).
 # Conversion energy $E_{\rm conv}=(M^{\rm PNS}_{\rm convert}-M_{\rm QS})c^2$ at fixed
 # $M_B$ (QS remnant from the row's own CFL EoS). Generalises the old fixed-σ table.
 
 # %%
 # ============================================================================
 #  Outcomes table. New physics vs the rest of the notebook: (i) the nucleate-or-not
-#  decision branch, (ii) M_QS(M_B) baryon-conserving remnant, (iii) E_conv. All
-#  assumptions are flagged inline for validation against the old table.
+#  decision branch, (ii) M_QS(M_B) baryon-conserving remnant, (iii) E_conv, (iv) BH
+#  collapse when M_B exceeds the supportable max (prompt at t_0 or on deleptonization).
+#  All assumptions are flagged inline for validation against the old table.
 # ============================================================================
 M_SUN_C2_ERG = 1.7827e54                 # M_sun c^2 [erg]  (new constant)
 TAB_SETS     = quark_param_sets          # rows: quark parametrizations
-TAB_SIGMAS   = [30.0]                    # and sigmas [MeV/fm^2]
+# σ [MeV/fm²]: span the σ_crit band at both snapshots so the remnant type varies
+# down the column — low σ nucleates at t_0 (QS), mid only by t_Tmax (QS), high stays
+# NS. σ_crit at the PNS centre sits ~50–200 here (cf. Fig 3d), so bracket it.
+TAB_SIGMAS   = [50.0, 100.0, 150.0, 200.0, 250.0]
 TAB_MPNS_T0  = [1.4, 1.6]                # initial PNS grav mass at t_0 [M_sun]
 TAB_TAU      = 1e-3                       # s — nucleation-criterion tau for the decision
 TAB_FLAVOR, TAB_CHARGE, TAB_PHASE = 'saddlepoint', 'coulomb_minimize', 'unpCFL'
@@ -3140,6 +3180,13 @@ _tab_nuc = _dc_replace(_nuc_cfg, tau_target=TAB_TAU)
 _t0key = min(tov_trapped, key=lambda k: abs(k[0] - 0.35) + abs(k[1] - 1.5))
 _tTkey = min(tov_trapped, key=lambda k: abs(k[0] - 0.25) + abs(k[1] - 2.0))
 _tov0, _tovT = tov_trapped[_t0key], tov_trapped[_tTkey]
+# BH bookkeeping: max PNS grav mass at t_0, and max baryonic mass the (deleptonized)
+# t_Tmax branch can still support. A fixed-M_B star that exceeds these collapses.
+_Mmax_t0   = float(_tov0[:int(np.argmax(_tov0[:, 4])) + 1, 4].max())
+_Mb_max_tT = float(_tovT[:int(np.argmax(_tovT[:, 4])) + 1, 5].max())
+# Include the maximal-mass PNS at t_0: it collapses to a BH after deleptonization
+# unless small σ lets it nucleate to a QS first.
+_TAB_MPNS  = list(TAB_MPNS_T0) + [round(_Mmax_t0, 3)]
 
 def _mb_to_M_interp(arr):
     """M(M_B) on the stable branch — robust to the duplicate/non-monotone M_B the
@@ -3175,37 +3222,55 @@ for pset in TAB_SETS:
     params = get_alphabag_custom(alpha=pset['alpha'], B4=pset['B4'], m_s=pset['m_s'])
     D0 = pset['Delta0']
     for sigma in TAB_SIGMAS:
-        for MpnsT0 in TAB_MPNS_T0:
-            # --- t_0 (fixed M_B thereafter) ---
-            Mb   = float(_binterp(_tov0, 4, 5)(MpnsT0))     # M -> Mb
+        for MpnsT0 in _TAB_MPNS:
+            Mb = float(_binterp(_tov0, 4, 5)(MpnsT0))       # M -> Mb (conserved after)
+            # --- prompt BH: PNS above the t_0 maximum mass -> no stable star ---
+            if (MpnsT0 > _Mmax_t0 + 1e-6) or not np.isfinite(Mb):
+                _rows.append(dict(
+                    params=q_tag_of(pset), sigma=sigma,
+                    M_t0=MpnsT0, Mb_t0=Mb, nBc_t0=np.nan, YSc_t0=np.nan,
+                    M_tT=np.nan, nBc_tT=np.nan, YSc_tT=np.nan,
+                    type='BH', M_rem=np.nan, E_conv_e53=np.nan))
+                continue
+            # --- t_0 central state + nucleation decision ---
             nBc0 = float(_binterp(_tov0, 4, 2)(MpnsT0))     # M -> n_Bc
             Tc0  = float(H['iso_trapped']['T'](nBc0, 0.35, 1.5))
             YS0  = float(H['trapped']['Y_S'](nBc0, 0.35, Tc0))
-            # --- t_Tmax at fixed M_B (NaN if beyond that branch's max) ---
-            MpnsT = float(_binterp(_tovT, 5, 4)(Mb))        # Mb -> M
-            nBcT  = float(_binterp(_tovT, 5, 2)(Mb))        # Mb -> n_Bc
-            TcT   = float(H['iso_trapped']['T'](nBcT, 0.25, 2.0)) if np.isfinite(nBcT) else np.nan
-            YST   = float(H['trapped']['Y_S'](nBcT, 0.25, TcT)) if np.isfinite(nBcT) else np.nan
-            # --- decision: sigma_crit at each snapshot, pick outcome ---
-            sc0 = _sigma_crit_at(nBc0, 0.35, 1.5, Tc0, params, D0)
-            scT = _sigma_crit_at(nBcT, 0.25, 2.0, TcT, params, D0)
+            sc0  = _sigma_crit_at(nBc0, 0.35, 1.5, Tc0, params, D0)
             if _nucleates(sc0, sigma):
+                # nucleates already at t_0 -> QS now; t_Tmax snapshot never reached ('--')
                 typ, Mconv = 'QS', MpnsT0
-            elif _nucleates(scT, sigma):
-                typ, Mconv = 'QS', MpnsT
+                MpnsT = nBcT = YST = np.nan
+            elif Mb > _Mb_max_tT + 1e-6:
+                # survives t_0 but deleptonization drops M_max below its M_B -> BH at t_Tmax
+                typ, Mconv = 'BH', np.nan
+                MpnsT = nBcT = YST = np.nan
             else:
-                typ, Mconv = 'NS', np.nan
+                # --- t_Tmax at fixed M_B: decide again ---
+                MpnsT = float(_binterp(_tovT, 5, 4)(Mb))    # Mb -> M
+                nBcT  = float(_binterp(_tovT, 5, 2)(Mb))    # Mb -> n_Bc
+                TcT   = float(H['iso_trapped']['T'](nBcT, 0.25, 2.0)) if np.isfinite(nBcT) else np.nan
+                YST   = float(H['trapped']['Y_S'](nBcT, 0.25, TcT)) if np.isfinite(nBcT) else np.nan
+                scT   = _sigma_crit_at(nBcT, 0.25, 2.0, TcT, params, D0)
+                if _nucleates(scT, sigma):
+                    typ, Mconv = 'QS', MpnsT
+                else:
+                    typ, Mconv = 'NS', np.nan
+            # --- remnant mass + conversion energy ---
             if typ == 'QS':
                 Mqs   = float(_M_QS_of_Mb(pset)(Mb))
                 Mrem  = Mqs
                 Econv = (Mconv - Mqs) * M_SUN_C2_ERG / 1e53 if np.isfinite(Mqs) else np.nan
-            else:
+            elif typ == 'NS':
                 Mrem  = float(_binterp(tov_cold, 5, 4)(Mb))  # cold NS remnant at fixed M_B
+                Econv = np.nan
+            else:                                            # BH
+                Mrem  = np.nan
                 Econv = np.nan
             _rows.append(dict(
                 params=q_tag_of(pset), sigma=sigma,
                 M_t0=MpnsT0, Mb_t0=Mb, nBc_t0=nBc0 / n_sat, YSc_t0=YS0,
-                M_tT=MpnsT, nBc_tT=nBcT / n_sat, YSc_tT=YST,
+                M_tT=MpnsT, nBc_tT=(nBcT / n_sat if np.isfinite(nBcT) else np.nan), YSc_tT=YST,
                 type=typ, M_rem=Mrem, E_conv_e53=Econv))
 
 tab = pd.DataFrame(_rows)
