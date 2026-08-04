@@ -1,4 +1,5 @@
 """The public import surface after the rewrite (old paths are gone)."""
+import pytest
 
 
 def test_root_public_api():
@@ -42,3 +43,32 @@ def test_old_paths_removed():
                 'nucleation.MRE'):
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module(mod)
+
+
+def test_no_undefined_names():
+    """Static sweep for undefined names across the package.
+
+    Why: splitting tables.py and analysis/sigma_crit.py into packages moved
+    functions away from the imports they relied on, and two names
+    (`ud_eps_per_nB`, `get_alphabag_custom`) ended up used but not imported.
+    Both sat inside joblib-parallel branches that no test reached, so the suite
+    stayed green and the failure only appeared during a full notebook run.
+
+    Import-time checks cannot catch this -- the module imports fine and only
+    raises NameError when that specific line executes. A static pass can.
+    """
+    import pathlib
+    import subprocess
+    import sys
+
+    pkg = pathlib.Path(__file__).resolve().parent.parent
+    try:
+        proc = subprocess.run([sys.executable, '-m', 'pyflakes', str(pkg)],
+                              capture_output=True, text=True)
+    except FileNotFoundError:                      # pragma: no cover
+        pytest.skip("pyflakes not installed")
+    if proc.returncode != 0 and not proc.stdout:
+        pytest.skip(f"pyflakes unavailable: {proc.stderr.strip()[:200]}")
+
+    undefined = [ln for ln in proc.stdout.splitlines() if 'undefined name' in ln]
+    assert not undefined, "undefined names:\n  " + "\n  ".join(undefined)
