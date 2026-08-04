@@ -2,7 +2,9 @@
 import numpy as np
 import pytest
 
-from nucleation.analysis.sigma_crit import (
+# Import from the package surface, not a submodule: which module a name lives
+# in is an internal layout detail, and nuc_an.<name> is what callers use.
+from nucleation.analysis import (
     critical_droplet_pt, tau_pt, sigma_target_pt, rehad_flags, NucConfig)
 
 SIGMA = 30.0
@@ -80,7 +82,7 @@ def test_rehad_flags_synthetic():
 
 def test_rehad_pressure_profile_smoke(H_interp, params):
     """rehad_pressure_profile runs on the real trapped EoS and returns ΔP."""
-    from nucleation.analysis.sigma_crit import rehad_pressure_profile
+    from nucleation.analysis import rehad_pressure_profile
     n_grid = np.linspace(0.4, 1.2, 6) * 0.16   # ~2.5..7.5 n_sat span in fm^-3
     n, dP = rehad_pressure_profile(
         H_interp, params, n_grid, Y_L_H=0.25, T=25.0,
