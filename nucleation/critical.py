@@ -14,7 +14,7 @@ Two entry points
   R-independent); the self-consistent 5-eq solver for coulomb_minimize (R and
   Q* co-solved); phase-switched piecewise barrier for unpCFL.
 * ``compute_energy_barrier(...)`` / ``barrier_profile(...)`` -> W(R) arrays for
-  plotting, plus ``compute_Qs_along_R`` (per-R Q* sweep at one point).
+  plotting.
 
 W_c conventions (used by sigma_crit)
 ------------------------------------
@@ -542,60 +542,3 @@ def compute_energy_barrier(
         R=R_values, W=W, W_bulk=W_b, W_surface=W_s, W_coulomb=W_c,
         Delta_f=Delta_f, delta_n_C=delta_n_C, sigma=sigma,
         lambda_D=(lam if lam is not None else np.nan))
-
-
-# =============================================================================
-# Q* swept over R at one hadronic point (coulomb_minimize W(R) plotting)
-# =============================================================================
-def compute_Qs_along_R(H_point, R_vec, params, sigma,
-                       quark_phase='unpaired', Delta0=None,
-                       include_photons=True, include_gluons=True,
-                       include_thermal_neutrinos=True, initial_guess=None):
-    """coulomb_minimize Q* as a function of R at one hadronic point.
-
-    Fixes the hadronic point and sweeps R (warm-started), returning per-R Q*
-    quantities plus the derived delta_n_C, Delta_f and barrier W(R). Used to plot
-    the coulomb_minimize barrier shape.
-    """
-    from nucleation.tables import _BASE_DATA_KEYS
-    solver_kw = dict(include_photons=include_photons,
-                     include_gluons=include_gluons,
-                     include_thermal_neutrinos=include_thermal_neutrinos)
-    R_vec = np.atleast_1d(np.asarray(R_vec, dtype=float))
-    n = R_vec.size
-    out = {k: np.full(n, np.nan) for k in _BASE_DATA_KEYS}
-    out['converged'] = np.zeros(n, dtype=bool)
-    out['R'] = R_vec.copy()
-    out['delta_n_C'] = np.full(n, np.nan)
-    out['Delta_f'] = np.full(n, np.nan)
-    out['W'] = np.full(n, np.nan)
-
-    guess = initial_guess
-    for k in range(n):
-        R_val = float(R_vec[k])
-        if not np.isfinite(R_val):
-            continue
-        if quark_phase == 'cfl':
-            result = solve_coulomb_minimize_cfl_at_R(
-                R_val, H_point, params, Delta0, sigma, **solver_kw,
-                initial_guess=guess)
-        else:
-            result = solve_coulomb_minimize_at_R(
-                R_val, H_point, params, sigma, **solver_kw, initial_guess=guess)
-        if result is None:
-            continue
-        for key in _BASE_DATA_KEYS:
-            out[key][k] = getattr(result, key)
-        out['converged'][k] = True
-        guess = np.array([result.mu_u, result.mu_d, result.mu_s, result.mu_e])
-        Qs_pt = SimpleNamespace(
-            P_total=result.P_total, n_B=result.n_B, mu_B=result.mu_B,
-            mu_C=result.mu_C, mu_S=result.mu_S, mu_e=result.mu_e,
-            mu_nu=H_point.mu_nu, Y_C=result.Y_C, Y_S=result.Y_S,
-            Y_e=result.Y_e, Y_nu=H_point.Y_nu)
-        dnC = _dnC(result)
-        Df = float(driving_force(Qs_pt, H_point))
-        out['delta_n_C'][k] = dnC
-        out['Delta_f'][k] = Df
-        out['W'][k] = work_of_formation(R_val, Df, sigma, dnC)
-    return out

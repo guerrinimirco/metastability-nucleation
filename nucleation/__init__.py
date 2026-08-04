@@ -37,7 +37,7 @@ from nucleation.composition import (
 # --- critical-droplet engine + barrier profile -------------------------------
 from nucleation.critical import (
     CriticalDroplet, critical_droplet,
-    EnergyBarrierResult, compute_energy_barrier, compute_Qs_along_R,
+    EnergyBarrierResult, compute_energy_barrier,
 )
 
 # --- rates -------------------------------------------------------------------
@@ -81,7 +81,7 @@ __all__ = [
     "R_GCN_SKIP_DEFAULT",
     # critical
     "CriticalDroplet", "critical_droplet", "EnergyBarrierResult",
-    "compute_energy_barrier", "compute_Qs_along_R",
+    "compute_energy_barrier",
     # rates
     "nucleation_rate", "nucleation_time", "effective_inertia",
     "quantum_nucleation_time", "QuantumNucleationResult",
