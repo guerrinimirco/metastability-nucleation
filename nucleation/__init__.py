@@ -55,6 +55,8 @@ from nucleation.tables import (
     build_thermal_nucleation_interpolators,
     export_thermal_nucleation_table, load_thermal_nucleation_table,
     QuantumNucleationObservables, compute_quantum_nucleation_observables,
+    build_quantum_nucleation_interpolators,
+    export_quantum_nucleation_table, load_quantum_nucleation_table,
 )
 
 # --- curves ------------------------------------------------------------------
@@ -90,6 +92,8 @@ __all__ = [
     "build_thermal_nucleation_interpolators",
     "export_thermal_nucleation_table", "load_thermal_nucleation_table",
     "QuantumNucleationObservables", "compute_quantum_nucleation_observables",
+    "build_quantum_nucleation_interpolators",
+    "export_quantum_nucleation_table", "load_quantum_nucleation_table",
     # curves
     "NucleationTemperatureResult", "compute_nucleation_temperature",
     "compute_nucleation_density", "nucleation_curve",

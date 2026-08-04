@@ -179,7 +179,22 @@ def effective_inertia(R, rho_H, n_B_ratio):
 # Continuum edge, turning points, actions  (internal)
 # =============================================================================
 def find_E_min(W_func, M_func, R_max=100.0):
-    """E_min = max_R [W(R) - 2 M(R)]: lower edge of the positive-energy band."""
+    """E_min = max_R [W(R) - 2 M(R)]: lower edge of the positive-energy band.
+
+    ``R_max`` MUST be the barrier peak R_c, not an arbitrary large radius. The
+    band edge belongs to the droplet's BOUND sub-barrier oscillation, which
+    lives entirely at R < R_inner < R_c (``oscillation_action`` integrates
+    0 -> R_inner), so a maximum located beyond the peak is not a band edge at
+    all.
+
+    This matters as soon as the Coulomb term is on. Without it W(R) falls
+    monotonically past R_c and the maximum is interior either way. With it the
+    electrostatic energy grows as +R^5 and eventually beats the -R^3 bulk gain,
+    so W(R) turns back UP at large R: an unbounded search then locks onto that
+    outer Coulomb wall and returns a meaningless E_min (~1e9 MeV instead of
+    ~10 MeV), after which no turning point exists below R_c and the whole WKB
+    pipeline raises. That is why every Coulomb-mode quantum point used to fail.
+    """
     def neg_diff(R):
         return -(W_func(R) - 2.0 * M_func(R))
     result = minimize_scalar(neg_diff, bounds=(1e-6, R_max), method='bounded')
@@ -187,12 +202,27 @@ def find_E_min(W_func, M_func, R_max=100.0):
 
 
 def find_turning_points(E, W_func, R_c, R_max=1000.0):
-    """Inner (R < R_c) and outer (R > R_c) roots of W(R) = E."""
+    """Inner (R < R_c) and outer (R > R_c) roots of W(R) = E.
+
+    The outer root is the FIRST crossing beyond the peak, located by walking
+    outward until W drops below E and only then bracketing. Bracketing
+    [R_c, R_max] directly is wrong whenever the Coulomb term is on: W(R) falls
+    through E, bottoms out, then climbs back above E as +R^5, so W(R_max) and
+    W(R_c) are both above E and brentq rejects the bracket ("f(a) and f(b) must
+    have different signs") even though a turning point plainly exists.
+    """
     def f(R):
         return W_func(R) - E
     R_inner = brentq(f, 1e-6, R_c)
-    R_outer = brentq(f, R_c, R_max)
-    return R_inner, R_outer
+
+    # Walk outward geometrically for the first R with W(R) < E.
+    R_lo, R_hi = R_c, R_c * 1.5
+    while R_hi < R_max:
+        if f(R_hi) < 0:
+            return R_inner, brentq(f, R_lo, R_hi)
+        R_lo, R_hi = R_hi, R_hi * 1.5
+    raise ValueError(
+        f"no outer turning point below R_max={R_max} for E={E:.6g}")
 
 
 def oscillation_action(E, W_func, M_func, R_inner):
@@ -246,7 +276,10 @@ def ground_state_energy(W_func, M_func, R_c):
     1. E_min = max(W - 2M); 2. R_inner at E_min; 3. m_0 = floor(I(E_min)/2pi + 1/4);
     4. solve I(E_0) = 2pi(m_0 + 3/4). Returns (E_0, R_inner, R_outer, m_0, E_min).
     """
-    E_min_val = find_E_min(W_func, M_func, R_max=max(10.0 * R_c, 100.0))
+    # Search the band edge only BELOW the barrier peak -- see find_E_min. With a
+    # Coulomb term W(R) rises again as +R^5 at large R, so searching past R_c
+    # finds that outer wall instead of the band edge.
+    E_min_val = find_E_min(W_func, M_func, R_max=R_c)
     R_inner_Emin, _ = find_turning_points(
         E_min_val, W_func, R_c, R_max=max(10.0 * R_c, 1000.0))
     I_Emin = oscillation_action(E_min_val, W_func, M_func, R_inner_Emin)

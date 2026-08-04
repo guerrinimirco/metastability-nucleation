@@ -428,6 +428,120 @@ expensive path and the reason the fixed-$R$ solvers exist.
 | unpCFL switching $S(R)$, eq. (18) | `barrier.get_switching_function` |
 | unpCFL global peak, eq. (20) | `critical._find_Rc_Wc_step` / `_find_Rc_Wc_tanh` |
 | Single public entry point | `critical.critical_droplet` |
+| Langer thermal rate, eq. (21) | `rates.nucleation_rate`, `nucleation_time` |
+| Effective inertia $M(R)$, eq. (22) | `rates.effective_inertia` |
+| Bohr–Sommerfeld $E_0$, eq. (25) | `rates.ground_state_energy` |
+| WKB exponent $A(E_0)$, eq. (24) | `rates.tunneling_action` |
+| Quantum time $\tau_{\rm qt}$, eq. (26) | `rates.quantum_nucleation_time` |
+| Quantum grid driver | `tables.compute_quantum_nucleation_observables` |
+
+---
+
+## 7. Quantum nucleation (relativistic WKB)
+
+At high temperature the droplet escapes by thermal activation **over** the
+barrier, at rate $\propto e^{-W_c/T}$ (§1). As $T\to0$ that channel shuts off and
+the transition proceeds by **tunnelling through** the barrier instead. The
+quantum rate then depends on the whole shape of $W(R)$, not on its peak alone —
+which is why $\tau_{\rm qt}$ needs a callable $W(R)$ where the thermal rate needs
+only $(R_c,W_c)$.
+
+### 7.1 The droplet as a one-dimensional quantum degree of freedom
+
+Treat the radius $R$ as a collective coordinate. Growing the droplet displaces
+the surrounding hadronic matter, and that irrotational flow gives $R$ an
+effective inertia (`rates.effective_inertia`):
+
+$$
+M(R) \;=\; 4\pi\rho_H\Big(1-\frac{n_B^{Q^\ast}}{n_B^{H}}\Big)^{2} R^{3},
+\tag{22}
+$$
+
+with $\rho_H\simeq m_n n_B^H$ unless a custom $\rho_H(n_B,T)$ is supplied. The
+factor $(1-n_B^{Q^\ast}/n_B^H)^2$ is the physical content: if the two phases had
+equal density nothing would have to move, and the droplet would carry no inertia.
+
+The motion is treated **relativistically**, so the actions carry the
+$\sqrt{(2M+E-W)(\dots)}$ form rather than the Schrödinger $\sqrt{2M(\dots)}$;
+$2M$ plays the role of the rest energy.
+
+### 7.2 Actions
+
+With $\hbar c$ restoring units, the bound sub-barrier motion has the
+Bohr–Sommerfeld action (`rates.oscillation_action`)
+
+$$
+I(E) \;=\; \frac{2}{\hbar c}\int_{0}^{R_{\rm in}}
+\sqrt{\big[2M(R)+E-W(R)\big]\big[E-W(R)\big]}\;dR ,
+\tag{23}
+$$
+
+and the classically forbidden region gives the tunnelling exponent
+(`rates.tunneling_action`)
+
+$$
+A(E) \;=\; \frac{2}{\hbar c}\int_{R_{\rm in}}^{R_{\rm out}}
+\sqrt{\big[2M(R)+E-W(R)\big]\big[W(R)-E\big]}\;dR ,
+\tag{24}
+$$
+
+where $R_{\rm in}<R_c<R_{\rm out}$ are the turning points $W(R)=E$.
+
+### 7.3 Ground state and the nucleation time
+
+The droplet does not tunnel from rest but from the lowest quantized level of the
+bound motion. With $E_{\rm min}=\max_R[W-2M]$ the lower edge of the
+positive-energy band and $m_0=\lfloor I(E_{\rm min})/2\pi+1/4\rfloor$ the number
+of levels it holds, $E_0$ solves (`rates.ground_state_energy`)
+
+$$
+I(E_0) \;=\; 2\pi\big(m_0+\tfrac34\big).
+\tag{25}
+$$
+
+The attempt frequency is $\nu_0=(dI/dE)^{-1}$ evaluated at $E_0$
+(`rates.oscillation_frequency`), and with $N_c$ independent nucleation centres
+
+$$
+\tau_{\rm qt} \;=\; \big[N_c\,\nu_0\,e^{-A(E_0)}\big]^{-1}.
+\tag{26}
+$$
+
+### 7.4 Two search-window subtleties (both are real, both bit)
+
+Equations (23)–(25) are one-dimensional root-finds, and **both of their search
+windows must be bounded by the barrier peak $R_c$**. This is not a numerical
+nicety: it is what makes them well posed once the Coulomb term is on.
+
+Without Coulomb, $W(R)\sim-R^3$ falls monotonically past $R_c$. With it, the
+electrostatic energy grows as $+R^5$ (eq. 13) and eventually beats the bulk gain,
+so $W(R)$ **turns back up** at large $R$. Consequently:
+
+1. $E_{\rm min}=\max_R[W-2M]$ must be searched on $R<R_c$ only. Searched over a
+   wide range it locks onto the outer Coulomb wall and returns
+   $E_{\rm min}\sim10^{9}$ MeV instead of $\sim10$ MeV. The bound is physical:
+   the band edge belongs to the bound oscillation, which lives entirely inside
+   $R_{\rm in}<R_c$.
+2. $R_{\rm out}$ is the **first** crossing of $W=E$ beyond $R_c$, found by
+   walking outward until $W<E$. Bracketing $[R_c,R_{\rm max}]$ directly fails
+   whenever $W$ has already climbed back above $E$ at $R_{\rm max}$: both
+   endpoints then lie above $E$ and the bracket is rejected, even though a
+   turning point plainly exists.
+
+Beyond the outer minimum of $W$ the droplet is supercritical and the thin-wall
+collective-coordinate picture no longer applies, so nothing physical is lost by
+confining the search.
+
+### 7.5 Thermal or quantum?
+
+The two channels are computed by parallel drivers over the same grid —
+`compute_thermal_nucleation_observables` and
+`compute_quantum_nucleation_observables` — sharing the same $Q^\ast$ table, the
+same $\Delta f$ and the *same* $R_c$ and $W_c$, so they can be compared point by
+point. The physical nucleation time is the shorter of the two; their crossover
+defines the temperature below which the transition is quantum-dominated. Both
+observables expose `.tau`, so either can be fed to the $\tau=\tau_{\rm target}$
+locus finders of `nucleation.curves` without special-casing.
 
 ---
 
