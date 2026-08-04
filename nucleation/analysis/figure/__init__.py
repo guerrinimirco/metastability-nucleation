@@ -28,6 +28,17 @@ from eos.general.observational_constraints import (
     add_observational_constraints, MR_CONSTRAINTS, DEFAULT_CONTOUR_DIR,
 )
 
+# --- nucleation-specific drawing primitives (defined in this subpackage) -----
+from .marks import (
+    MASS_MARKS_DEFAULT, mass_marks, label_with_arrows, isentrope_mass_markers,
+)
+from .maps import (
+    REASON_STYLE, REGIME_STYLE, ISO_SIGMA_COLOUR, ISO_MASS_COLOUR,
+    sigma_map, diverging_map, symmetric_vlim, iso_lines,
+    reject_outlines, regime_outlines,
+)
+from .bundles import resample_profiles, band, quantile_bins, summary_points
+
 __all__ = [
     # --- publication style (from eos.general.figure_style) ---
     "set_paper_style", "paper_grid", "panel_label",
@@ -35,4 +46,13 @@ __all__ = [
     "PRD_COL_W", "PRD_FULL_W", "PRD_CENTERED_W",
     # --- observational overlays (from eos.general.observational_constraints) ---
     "add_observational_constraints", "MR_CONSTRAINTS", "DEFAULT_CONTOUR_DIR",
+    # --- marks: which star is which on a sequence ---
+    "MASS_MARKS_DEFAULT", "mass_marks", "label_with_arrows",
+    "isentrope_mass_markers",
+    # --- maps: the (B^1/4, Delta_0) plane layers ---
+    "REASON_STYLE", "REGIME_STYLE", "ISO_SIGMA_COLOUR", "ISO_MASS_COLOUR",
+    "sigma_map", "diverging_map", "symmetric_vlim", "iso_lines",
+    "reject_outlines", "regime_outlines",
+    # --- bundles: many replayed curves ---
+    "resample_profiles", "band", "quantile_bins", "summary_points",
 ]

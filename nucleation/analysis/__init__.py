@@ -42,6 +42,21 @@ from .scan import (
     scan_cfl_filters, scan_unpaired_filters, compute_sigma_crit,
     run_sigma_crit_scan, plot_sigma_crit_grid,
 )
+from .stellar import (
+    TOV_COL, stable_branch, max_masses, branch_interp, snapshot_key,
+    load_tov_trapped, nearest_trapped_sequence, cold_quark_star_branch,
+)
+from .stability import (
+    E_PER_BARYON_STABLE, energy_per_baryon_at_P0, two_flavour_energy_at_P0,
+    B4_at_energy, stability_curve, resample_curve,
+)
+from .droplet import (
+    REGIME, droplet_regime_grid, barrier_ratio_map, sigma_crit_along_sequence,
+)
+from .outcomes import (
+    M_SUN_C2_ERG, Snapshot, EvolutionTrack, nucleates, sigma_crit_at_snapshot,
+    outcome_row, outcomes_table, to_latex_tabular, pick_cell_by_Mmax,
+)
 # Re-export the private joblib-capability flag (the notebook reads
 # nuc_an._HAVE_JOBLIB); the `as` form marks it a deliberate re-export so
 # linters do not flag it unused.
@@ -63,4 +78,17 @@ __all__ = [
     # scan
     "scan_cfl_filters", "scan_unpaired_filters", "compute_sigma_crit",
     "run_sigma_crit_scan", "plot_sigma_crit_grid",
+    # stellar
+    "TOV_COL", "stable_branch", "max_masses", "branch_interp", "snapshot_key",
+    "load_tov_trapped", "nearest_trapped_sequence", "cold_quark_star_branch",
+    # stability
+    "E_PER_BARYON_STABLE", "energy_per_baryon_at_P0", "two_flavour_energy_at_P0",
+    "B4_at_energy", "stability_curve", "resample_curve",
+    # droplet
+    "REGIME", "droplet_regime_grid", "barrier_ratio_map",
+    "sigma_crit_along_sequence",
+    # outcomes
+    "M_SUN_C2_ERG", "Snapshot", "EvolutionTrack", "nucleates",
+    "sigma_crit_at_snapshot", "outcome_row", "outcomes_table",
+    "to_latex_tabular", "pick_cell_by_Mmax",
 ]
