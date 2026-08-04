@@ -7,7 +7,8 @@ Module layout (physics flows top to bottom):
     critical     -- the single critical-droplet engine + W(R) profile builder
     rates        -- Langer thermal + relativistic-WKB quantum rates
     tables       -- grid drivers over (n_B_H, [Y], T) + .dat readers/writers
-    curves       -- nucleation threshold curves tau = tau_target
+    conditions   -- WHERE nucleation happens: the tau = tau_target locus,
+                    plus the single-point API (nucleation_point)
     analysis     -- sigma_crit parameter scans + figures (see nucleation.analysis)
 
 The names below are the public API; import them directly, e.g.
@@ -59,11 +60,14 @@ from nucleation.tables import (
     export_quantum_nucleation_table, load_quantum_nucleation_table,
 )
 
-# --- curves ------------------------------------------------------------------
-from nucleation.curves import (
+# --- nucleation conditions (tau = tau_target loci + the single-point API) -----
+from nucleation.conditions import (
     NucleationTemperatureResult,
     compute_nucleation_temperature, compute_nucleation_density,
     nucleation_curve, build_nucleation_temperature_interpolator,
+    NucleationPoint, nucleation_point, tau_at,
+    NucleationCondition, T_nuc, nB_nuc,
+    crossover_radius, hadronic_point, V_NUCLEATION,
 )
 
 __all__ = [
@@ -94,8 +98,11 @@ __all__ = [
     "QuantumNucleationObservables", "compute_quantum_nucleation_observables",
     "build_quantum_nucleation_interpolators",
     "export_quantum_nucleation_table", "load_quantum_nucleation_table",
-    # curves
+    # conditions
     "NucleationTemperatureResult", "compute_nucleation_temperature",
     "compute_nucleation_density", "nucleation_curve",
     "build_nucleation_temperature_interpolator",
+    "NucleationPoint", "nucleation_point", "tau_at",
+    "NucleationCondition", "T_nuc", "nB_nuc",
+    "crossover_radius", "hadronic_point", "V_NUCLEATION",
 ]

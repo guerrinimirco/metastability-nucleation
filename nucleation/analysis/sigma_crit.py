@@ -22,47 +22,22 @@ from __future__ import annotations
 import numpy as np
 from scipy.optimize import brentq
 
-from eos.alphabag.parameters import get_alphabag_custom
-from eos.alphabag.thermodynamics_quarks import T_critical   # CFL gap melting temp (single source)
-from eos.general.physics_constants import hc
-from nucleation.critical import critical_droplet
-from nucleation.rates import nucleation_rate, nucleation_time
+from nucleation.conditions import (
+    # The per-point primitives live in the CORE now (nucleation.conditions), so
+    # the tau = tau_target locus can be built from them without the core having
+    # to reach up into `analysis`. Re-exported here under the same names, and
+    # wrapped below where the old NucConfig-taking signature has to be kept.
+    crossover_radius, hadronic_point, nucleation_point,
+)
 from nucleation.analysis.config import NucConfig, StarMatch
 
 # =============================================================================
-#  Single-point nucleation
+#  Single-point nucleation  (NucConfig adapters over nucleation.conditions)
 # =============================================================================
-def crossover_radius(T, Delta0):
-    """unpCFL coherence radius R_x(T) = hc/Delta(T), using the SAME CFL gap as the
-    EoS: Delta(T)=Delta0*sqrt(1-(T/Tc)^2) with Tc=T_critical(Delta0) (=0.57*2^(1/3)
-    *Delta0, incl. the CFL enhancement). inf at/above Tc (no pairing -> unpaired).
-    Tc is taken from eos.T_critical so R_x can never drift from the gap in gap_cfl."""
-    if Delta0 <= 0:
-        return np.inf
-    T_c = T_critical(Delta0)
-    ratio = np.asarray(T / T_c)
-    gap = np.where(ratio < 1, Delta0 * np.sqrt(np.maximum(0, 1 - ratio**2)), 0.0)
-    return np.where(gap > 0, hc / gap, np.inf)
-
-
-def hadronic_point(H_trapped: dict, nB, YL, T):
-    """Trapped hadronic state (SimpleNamespace) at one (n_B, Y_L, T) point.
-
-    Evaluates the trapped-neutrino interpolator dict at the point and packs
-    every field the Q* solvers and ``driving_force`` need. Charge neutrality
-    of the bulk hadronic phase fixes Y_e = Y_C; lepton-number conservation
-    fixes Y_nu = Y_L - Y_C."""
-    pt = (nB, YL, T)
-    h = SimpleNamespace(
-        n_B=float(nB), T=float(T),
-        P_total=float(H_trapped['P'](*pt)),   e_total=float(H_trapped['eps'](*pt)),
-        mu_B=float(H_trapped['mu_B'](*pt)),   mu_C=float(H_trapped['mu_C'](*pt)),
-        mu_S=float(H_trapped['mu_S'](*pt)),   mu_e=float(H_trapped['mu_e'](*pt)),
-        mu_nu=float(H_trapped['mu_nu'](*pt)),
-        Y_C=float(H_trapped['Y_C'](*pt)),     Y_S=float(H_trapped['Y_S'](*pt)))
-    h.Y_e = h.Y_C
-    h.Y_nu = float(YL) - h.Y_C
-    return h
+# crossover_radius / hadronic_point / nucleation_point are imported from the
+# core above. The two functions defined here keep the analysis-layer calling
+# convention -- positional args ending in a NucConfig -- because the notebook
+# and the sigma scan call them that way at ~10 sites. They add no physics.
 
 
 def central_state(MT0, star: StarMatch):
@@ -95,10 +70,10 @@ def critical_droplet_pt(sigma, H_pt, T_c, flavor, charge, phase, cache,
                         params, Delta0, nuc: NucConfig):
     """Critical droplet at one hadronic point: (R_c [fm], W_c [MeV], Qs).
 
-    Thin wrapper over ``nucleation.critical.critical_droplet`` -- the single
-    barrier engine shared with the tables and the notebook W(R) plots, so the
-    physics can never diverge. ``cache`` (a dict) memoizes the sigma-independent
-    composition solves across the sigma scan.
+    NucConfig-taking adapter over ``conditions.nucleation_point``, which routes
+    to the single barrier engine shared with the tables and the notebook W(R)
+    plots -- so the physics can never diverge between them. ``cache`` (a dict)
+    memoizes the sigma-independent composition solves across a sigma scan.
 
     Returns
     -------
@@ -109,31 +84,30 @@ def critical_droplet_pt(sigma, H_pt, T_c, flavor, charge, phase, cache,
       * finite values     -- genuine critical droplet; Qs is the droplet state
                              (for unpCFL: the phase selected at the peak).
     """
-    Rx = float(crossover_radius(T_c, Delta0)) if phase == 'unpCFL' else None
-    cd = critical_droplet(
-        H_pt, sigma=sigma, params=params, flavor_mode=flavor,
-        electric_charge_mode=charge, quark_phase=phase, Delta0=Delta0, Rx=Rx,
-        cache=cache, include_photons=nuc.include_photons,
+    pt = nucleation_point(
+        H_pt, getattr(H_pt, 'n_B', np.nan), T_c, sigma, params=params,
+        quark_phase=phase, Delta0=Delta0, flavor_mode=flavor,
+        electric_charge_mode=charge, cache=cache, V=nuc.V,
+        include_photons=nuc.include_photons,
         include_gluons=nuc.include_gluons,
         include_thermal_neutrinos=nuc.include_thermal_neutrinos)
-    return cd.R_c, cd.W_c, cd.Qs
+    return pt.R_star, pt.W_star, pt.Qs
 
 
-def tau_pt(sigma, H_pt, T_c, flavor, charge, phase, cache, params, Delta0, nuc: NucConfig):
+def tau_pt(sigma, H_pt, T_c, flavor, charge, phase, cache, params, Delta0,
+           nuc: NucConfig):
     """Central nucleation time tau [s] at one sigma, for one droplet phase.
 
-    Thin wrapper over ``critical_droplet_pt``: converts (R_c, W_c, Qs) to a
-    Langer rate and tau = 1/(Gamma V). Returns NaN on solver failure, +inf
-    when the hadronic phase is stable (W_c = inf -> never nucleates)."""
-    R_c, W_c, Qs = critical_droplet_pt(sigma, H_pt, T_c, flavor, charge, phase,
-                                       cache, params, Delta0, nuc)
-    if np.isposinf(W_c):
-        return np.inf
-    if Qs is None or not (np.isfinite(R_c) and R_c > 0
-                          and np.isfinite(W_c) and W_c > 0):
-        return np.nan
-    Gamma = float(nucleation_rate(W_c, R_c, sigma, T_c, H_pt, Qs))
-    return float(nucleation_time(Gamma, nuc.V)) if Gamma > 0 else np.inf
+    NucConfig-taking adapter over ``conditions.nucleation_point``. Returns NaN
+    on solver failure, +inf when the hadronic phase is stable (W_c = inf, so
+    nucleation never happens)."""
+    return nucleation_point(
+        H_pt, getattr(H_pt, 'n_B', np.nan), T_c, sigma, params=params,
+        quark_phase=phase, Delta0=Delta0, flavor_mode=flavor,
+        electric_charge_mode=charge, cache=cache, V=nuc.V,
+        include_photons=nuc.include_photons,
+        include_gluons=nuc.include_gluons,
+        include_thermal_neutrinos=nuc.include_thermal_neutrinos).tau
 
 
 def sigma_target_pt(H_pt, T_c, flavor, charge, phase, params, Delta0,

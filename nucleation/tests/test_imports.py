@@ -23,7 +23,7 @@ def test_per_module_imports():
     from nucleation.critical import critical_droplet, compute_energy_barrier
     from nucleation.rates import nucleation_rate, quantum_nucleation_time
     from nucleation.tables import compute_Qstar_table, GRID_AXES
-    from nucleation.curves import compute_nucleation_density
+    from nucleation.conditions import compute_nucleation_density
     assert 'trapped_neutrinos' in GRID_AXES
 
 

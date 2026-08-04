@@ -183,6 +183,6 @@ def test_tau_alias_and_interpolators(qobs):
 
 def test_curve_finder_accepts_quantum_observables(qobs):
     """compute_nucleation_density reads obs.tau -- the alias must make it work."""
-    from nucleation.curves import compute_nucleation_density
+    from nucleation.conditions import compute_nucleation_density
     res = compute_nucleation_density(qobs, tau_target=1e-3, scan='n_B')
     assert hasattr(res, 'T_nuc')                     # ran without AttributeError
