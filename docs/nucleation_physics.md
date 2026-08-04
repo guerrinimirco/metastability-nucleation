@@ -434,6 +434,12 @@ expensive path and the reason the fixed-$R$ solvers exist.
 | WKB exponent $A(E_0)$, eq. (24) | `rates.tunneling_action` |
 | Quantum time $\tau_{\rm qt}$, eq. (26) | `rates.quantum_nucleation_time` |
 | Quantum grid driver | `tables.compute_quantum_nucleation_observables` |
+| Single-point everything, eq. (27) | `conditions.nucleation_point` |
+| $\tau=\tau_{\rm target}$ locus, eq. (28) | `conditions.NucleationCondition` |
+| Star shells, eq. (29) | `analysis.star_shell_states` |
+| $\sigma_{\rm crit}$, eq. (30) | `analysis.sigma_target_pt` |
+| Acceptance filters, §8.2 | `analysis.passes_cfl_filters` |
+| NS / QS / BH decision, §8.3 | `analysis.outcome_row` |
 
 ---
 
@@ -565,3 +571,128 @@ the code uses an exact Maclaurin series below $x=0.5$ and the closed form above.
 The composition is identical to plain GCN: the electrostatic potential shifts
 $\mu_C$ and $\mu_e$ equally at the interface and cancels in every equilibrium
 condition.
+
+
+---
+
+## 8. From a droplet to a star
+
+Sections 1-7 answer "does a droplet form here". A star is not a point, and the
+observable is not a nucleation time -- it is which kind of compact object is
+left. Three further steps close that gap.
+
+### 8.1 The critical surface tension $\sigma_{\rm crit}$
+
+$\sigma$ is the least constrained input in the problem: it is not measured, and
+model estimates span an order of magnitude. Quoting $\tau$ at an assumed
+$\sigma$ therefore buries the dominant uncertainty in an assumption.
+
+Instead we inverta the question. Since $W_*\propto\sigma^3$ (eq. 4) the barrier
+rises steeply with $\sigma$, so $\tau(\sigma)$ is monotonic and there is a
+unique threshold
+
+$$
+\tau\big(\sigma_{\rm crit}\big) \;=\; \tau_{\rm target},
+\tag{30}
+$$
+
+with the star converting iff $\sigma<\sigma_{\rm crit}$
+(`analysis.sigma_target_pt`). The root-find is a coarse scan over
+$[\sigma_{\rm lo},\sigma_{\rm hi}]$ followed by `brentq` on the bracketing
+pair; the coarse scan is what selects *which* crossing is refined, so its
+resolution is part of the physics, not a tolerance.
+
+Two conventions carry through the code:
+
+* $\sigma_{\rm crit}=+\infty$ -- the hadronic phase is unstable at every
+  $\sigma$, so nucleation always happens;
+* $\sigma_{\rm crit}=$ NaN -- the solve failed. NaN is **not** "does not
+  nucleate"; it is "unknown", and is excluded rather than counted as a negative.
+
+### 8.2 Star-wide, not central
+
+The obvious place to evaluate eq. (30) is the stellar centre, and that is wrong
+often enough to matter. Near the corner of parameter space where strange quark
+matter is only just absolutely stable, the driving force $|\Delta f|$ peaks
+around $2\,n_{\rm sat}$ and *weakens* toward the centre, because the hadronic
+EoS stiffens faster than the quark one. An off-centre shell then nucleates first.
+
+$\sigma_{\rm crit}$ is therefore defined star-wide,
+
+$$
+\sigma_{\rm crit}^{\rm star} \;=\; \max_{\text{shells } i}\;
+\sigma_{\rm crit}\big(n_B^{(i)}, T^{(i)}\big),
+\tag{29}
+$$
+
+over `N_SHELLS` shells from $n_{B,\min}$ to the centre, each at the temperature
+its $(Y_L,S)$ isentrope assigns (`analysis.star_shell_states`). Six shells are
+converged to better than 0.5 % against twelve. The centre-only value can
+underestimate the star-wide one by up to a factor $\sim2$ in that corner, so the
+two are **not interchangeable** and every figure and table states which it uses.
+
+### 8.3 Which parameters describe a real star
+
+Before nucleation is even asked about, a quark parameter set must survive four
+filters (`analysis.passes_cfl_filters`), applied cheap-to-expensive so a rejected
+cell never pays for a TOV solve:
+
+1. **Witten window, bound side** -- 3-flavour matter must satisfy
+   $e/n_B<930$ MeV at $P=0$, or a strange star could not hold itself together.
+2. **Witten window, unbound side** -- 2-flavour ($ud$) matter must *not*, or
+   ordinary nuclei would decay and there would be no ordinary matter to observe.
+3. **No re-hadronization** -- the quark pressure must stay above the hadronic one
+   past their crossing in $\mu_B$, both in bulk and at droplet level; otherwise
+   a converted star would convert back.
+4. **Maximum mass** -- the cold sequence must reach the heaviest observed pulsar.
+
+Each cell records the *first* filter it failed, as a nested integer code, so
+contouring that field at half-integer levels draws every filter's pass edge in
+one pass.
+
+### 8.4 The outcome: NS, QS or BH
+
+A proto-neutron star is a sequence of objects, not one. Between the two snapshots
+$t_0$ (lepton-rich, $Y_L=0.35$, $S=1.5$) and $t_{T_{\max}}$ (deleptonized,
+$Y_L=0.25$, $S=2.0$) its **baryon number is conserved** but its maximum
+gravitational mass is not: trapped neutrinos stiffen the EoS, so $M_{\max}$
+*falls* as they escape.
+
+Asking eq. (30) at each snapshot then gives three outcomes
+(`analysis.outcome_row`):
+
+* **QS** -- $\sigma<\sigma_{\rm crit}$ at either snapshot. The remnant is read
+  off the cold quark-star sequence at **fixed $M_B$**, and the gravitational-mass
+  deficit is released:
+  $E_{\rm conv}=(M_{\rm PNS}-M_{\rm QS})c^2$, of order $10^{53}$ erg.
+* **BH** -- born above the $t_0$ maximum mass (prompt), or surviving $t_0$ only
+  for deleptonization to drop $M_{\max}$ below its $M_B$ (delayed).
+* **NS** -- neither: it cools into an ordinary neutron star of the same baryon
+  number.
+
+---
+
+## 9. Nucleation conditions: the $\tau=\tau_{\rm target}$ locus
+
+Rather than a rate at a point, what a figure usually wants is the *boundary*: the
+curve in the $(n_B,T)$ plane along which
+
+$$
+\tau\big(n_B^H,\,Y_L^H,\,T\big) \;=\; \tau_{\rm target}.
+\tag{28}
+$$
+
+Above it a droplet forms in time; below it the hadronic star survives. Overlaying
+the PNS isentrope on this locus turns the microphysics into a statement about
+stellar mass: the crossing is the mass at which conversion becomes possible.
+
+`conditions.NucleationCondition` builds the locus three ways -- from a computed
+grid, from any $\log_{10}\tau$ interpolator, or by solving on the fly with no
+table at all -- and exposes the same $T(n_B)$, $n_B(T)$ and `curve()` afterwards.
+Thermal and quantum observables both work, because both expose `.tau`.
+
+**Scan direction is a physics choice, not a preference.** Root-finding along $T$
+at fixed $n_B$ (`scan='n_B'`) is required for the unpCFL phase: the CFL gap melts
+as $T$ rises, so $\tau$ is **non-monotonic** in $T$ and the other scan direction
+silently locks onto the wrong branch. Both directions take the first *downward*
+crossing.
