@@ -36,25 +36,22 @@ def test_roundtrip(tmp_path, params):
             assert np.array_equal(t2.data[k], arr)
 
 
-def _small_H(H_table_subgrid_needed=True):
-    from eos.sfho.compute_tables import load_eos_table as load_h
-    path = os.path.join(HERE, '..', '..', 'output', 'tables_Hphase',
-                        'eos_hadronic_trapped_sfho_2famphi_xsd115.dat')
-    if not os.path.exists(path):
-        pytest.skip("hadronic table not present")
+def _small_H(H_table):
+    """A few-point corner of the fixture table -- enough to exercise the grid
+    driver without paying for the whole grid in every table test."""
     import copy
-    th = load_h(path, 'trapped_neutrinos')
-    sub = copy.copy(th)
-    inB, iYL, iT = range(40, 46), range(0, 2), range(10, 13)
-    sub.grids = {'n_B': th.grids['n_B'][40:46], 'Y_L': th.grids['Y_L'][0:2],
-                 'T': th.grids['T'][10:13]}
+    sub = copy.copy(H_table)
+    inB, iYL, iT = range(8, 14), range(0, 2), range(4, 7)
+    sub.grids = {'n_B': H_table.grids['n_B'][8:14],
+                 'Y_L': H_table.grids['Y_L'][0:2],
+                 'T': H_table.grids['T'][4:7]}
     sub.data = {k: (v[np.ix_(inB, iYL, iT)] if getattr(v, 'ndim', 0) == 3 else v)
-                for k, v in th.data.items()}
+                for k, v in H_table.data.items()}
     return sub
 
 
-def test_qstar_table_and_interp(params):
-    sub = _small_H()
+def test_qstar_table_and_interp(params, H_table):
+    sub = _small_H(H_table)
     t = compute_Qstar_table(sub, 'saddlepoint', 'gcn', params, sigma=30.0,
                             quark_phase='unpaired')
     assert int(t.data['converged'].sum()) > 0
@@ -67,8 +64,8 @@ def test_qstar_table_and_interp(params):
         t.data['P_total'][0, 0, 0], rel=1e-6)
 
 
-def test_screening_table_smoke(params):
-    sub = _small_H()
+def test_screening_table_smoke(params, H_table):
+    sub = _small_H(H_table)
     t_scr = compute_Qstar_table(sub, 'saddlepoint', 'screening', params,
                                 sigma=30.0, quark_phase='unpaired')
     t_gc = compute_Qstar_table(sub, 'saddlepoint', 'gcn_coulomb', params,
