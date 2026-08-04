@@ -260,4 +260,6 @@ tolerance.
 
 ## Licence
 
-MIT. See [`LICENSE`](LICENSE).
+**TODO — not yet chosen.** Pick one before making the repository public;
+without a licence file, others have no legal right to use or build on this code.
+MIT or BSD-3-Clause are the usual choices for research code of this kind.
