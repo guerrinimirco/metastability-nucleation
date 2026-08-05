@@ -164,7 +164,28 @@ Three quantities are sensitive to resolution in ways the smoke grid cannot show:
 
 ---
 
-## 6. Regenerating the test fixture
+## 6. Parameters the published figures depend on
+
+Part IV reproduces the figures the paper carries. Several Part-I/II settings are
+not free knobs but part of that contract, and changing one changes a published
+figure without any error being raised:
+
+| Setting | Value | Why it is not free |
+| --- | --- | --- |
+| `SIGMA_LIST` | 50, 80, 100, 150, 200, 250 | Fig. 4 draws {50,100,150} for Set A and {150,200,250} for Set B; Fig. 3 uses {80,100,150}. A missing value silently drops a curve. |
+| `E_C_VEC` | 150–2500 MeV/fm³, 100 pts | the **hadronic** TOV grid |
+| `E_C_VEC_QUARK` | 100–2000 MeV/fm³, 80 pts | the **quark-star** TOV grid. It sets `M_max`, hence which cells the filters accept, hence Fig. 5's accept mask and its iso-M_max contours. |
+| `MT0_REF` | 1.4 M⊙ | the grid Fig. 5, the W\*/T map and the outcomes table read |
+| `F8_SHOW` | `[1, 3]` | the two α_s panels of Fig. 5 |
+| `Rx` in II.7 | `crossover_radius(T_grid, Δ₀)` | must be the **array over the T grid**. A scalar puts the unpaired→CFL kink at the same radius for every temperature, which is wrong everywhere except at that one T. |
+
+The `frozen` / LCN / unpaired tables exist only for Appendix B, and the LCN and
+GCN `unpCFL` tables only for the method comparison; neither enters a headline
+number, but both must be tabulated or their curves vanish.
+
+---
+
+## 7. Regenerating the test fixture
 
 Only needed if the SFHo EoS or its parametrization changes:
 

@@ -213,21 +213,36 @@ anything; only the multi-GB intermediates need Part II.
 
 ## Figure map
 
-| Figure | Notebook | File |
-| --- | --- | --- |
-| 1 — nucleation barrier | IV.1 | `paper_fig1_barrier` |
-| 2 — stellar sequences | IV.2 | `paper_fig2_stellar_sequences` |
-| 3 — nucleation at the PNS centre | IV.3 | `paper_fig3_centre_vs_Mpns` |
-| 4 — nucleation conditions $T_{\rm nuc}(n_B)$ | IV.4 | `paper_fig4_Tnuc` |
-| 5 — $\sigma_{\rm crit}$ parameter plane | IV.5 | `paper_fig5_sigmacrit_map` |
-| Appendix — method dependence | IV.6 | `paper_appendix_methods` |
-| Outcomes table | IV.7 | `table_outcomes_*.csv` / `.tex` |
-| S1 — viable region as stars | V.1 | `supp_viable_region_stars` |
-| S2 — $\sigma_{\rm crit}$ sensitivity | V.2 | `supp_dsigma_MT0` |
-| S3 — $W_*/T$ invariance | V.3 | `supp_WoverT_map` |
-| S4 — unpaired matter | V.4 | `supp_unpaired_sigmacrit` |
+The seven figures the paper includes, in `output/paper/figures/paper/`:
 
-Every figure writes its underlying arrays to `output/*/figure_data/` as CSV.
+| Figure | Notebook | File stem |
+| --- | --- | --- |
+| 1 — nucleation barrier and critical quantities | IV.1 | `paper_fig1_barrier_{tag}_{set}` |
+| 2 — stellar sequences | IV.2 | `paper_fig2_stellar_sequences_{tag}` |
+| 3 — nucleation at the PNS centre vs $M_{\rm PNS}$ | IV.3 | `paper_fig3_Rstar_Wc_tau_sigmacrit_{tag}_{set}` |
+| 4 — nucleation conditions $T_{\rm nuc}(n_B^H)$ | IV.4 | `paper_fig4_Tnuc_{tag}` |
+| 5 — $\sigma_{\rm crit}$ parameter plane | IV.5 | `paper_fig5_sigcrit_map_isolines_{tag}` |
+| A — electric-charge prescriptions | IV.6 | `paper_appA_charge_prescriptions_{tag}` |
+| B — frozen vs saddle-point flavour | IV.7 | `paper_appB_frozen_vs_saddlepoint_{tag}` |
+| Outcomes table | IV.8 | `table_outcomes_{tag}.csv` / `.tex` |
+
+Supporting material, in `output/paper/figures/supplementary/`:
+
+| Figure | Notebook | File stem |
+| --- | --- | --- |
+| viable region as stars ($M$–$R$, $P(\mu_B)$) | V.1 | `paper_fig5a_MR_PmuB_sigmacrit_{tag}` |
+| $\Delta\sigma_{\rm crit}$: $M_{T0}$ and phase | V.2 | `dsigma_MT0_{tag}_{phase}`, `dsigma_phase_{tag}_MT0{m}` |
+| $W_*/T$ over the accessible plane | V.3 | `WoverT_map_{tag}_MT0{m}` |
+| unpaired $\sigma_{\rm crit}$, three $m_s$ | V.4 | `sigcrit_unpaired_ms_panels_{tag}` |
+
+`{tag}` is the run tag (`xsd115`) and `{set}` the quark parameter set
+(`B4145_D80_a0.16_ms100`). Every figure writes its underlying arrays to
+`output/*/figure_data/` as CSV.
+
+**These cells reproduce the published figures byte-for-byte in style** —
+colours, sizes, limits, legends and panel anchors are the ones the paper
+carries. The knob block at the top of each cell is what to edit; the drawing
+code below it is not decoration but the figure contract.
 
 ---
 
