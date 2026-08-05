@@ -83,6 +83,7 @@ from matplotlib.lines import Line2D
 from matplotlib.colors import Normalize
 from matplotlib.ticker import MultipleLocator, FuncFormatter
 from scipy.interpolate import interp1d
+from scipy.stats import spearmanr
 
 # --- eos: equation of state, TOV structure, publication figure style -----------
 from eos.sfho.parameters import create_custom_parametrization
@@ -115,7 +116,7 @@ from nucleation.analysis import (
     FilterConfig, NucConfig, make_star_match, build_PH_of_muB,
     central_state, star_shell_states, critical_droplet_pt, sigma_target_pt,
     # acceptance filters and the parameter-plane scans
-    replay_accepted, scan_unpaired_filters, compute_sigma_crit,
+    replay_cfl, replay_accepted, scan_unpaired_filters, compute_sigma_crit,
     run_sigma_crit_scan, REASON_CODE,
     # TOV sequence bookkeeping
     TOV_COL, stable_branch, branch_interp, load_tov_trapped,
@@ -470,6 +471,15 @@ SCAN = dict(
 # TUNABLE: pt sizes for every paper figure. fontsize=title/fallback,
 # labelsize=axis names + tick numbers, legendsize=legend, aspect=panel W/H.
 PAPER_STYLE = dict(fontsize=11, labelsize=11, legendsize=9, aspect=1.1)
+
+# Figures 1-3 of the manuscript were produced BEFORE PAPER_STYLE was changed
+# from 10 pt / aspect 1.2 to the values above, so reproducing those pages needs
+# the style they were actually drawn with -- there is no single style that
+# reproduces the whole published set. Set this to PAPER_STYLE to put the entire
+# figure set on one modern style instead; every figure is then self-consistent
+# and Figs. 1-3 change proportions relative to the current PDFs.
+PAPER_STYLE_FIG123 = dict(fontsize=10, labelsize=10, legendsize=9, aspect=1.2)
+
 set_paper_style(**{k: v for k, v in PAPER_STYLE.items() if k != 'aspect'})
 
 # --- which sigma values the figures will ask for -------------------------------
@@ -1224,7 +1234,8 @@ for F1_SET in [quark_param_sets[0]]:
         return int(np.argmin(np.abs(_Tg - T)))
 
     fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double',
-                                               placeholder=False, **PAPER_STYLE)
+                                               placeholder=False,
+                                               **PAPER_STYLE_FIG123)
 
     # ---- (a) W(R): density = colour, phase = line style ----
     _cA = plt.cm.viridis(np.linspace(0.12, 0.85, len(F1_DENS)))
@@ -1380,7 +1391,8 @@ _F2SEQ += [
 ]
 
 fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double',
-                                           placeholder=False, **PAPER_STYLE)
+                                           placeholder=False,
+                                           **PAPER_STYLE_FIG123)
 
 # (a) M-R. Fix the view FIRST so the constraint fills (some reach R ~ 21 km)
 #     cannot auto-expand the axis and fling the inline labels into the margin.
@@ -1538,7 +1550,8 @@ for FN2_SET in quark_param_sets:
     _T_CFL  = float(T_critical(_D0))          # CFL is undefined above this
 
     fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double',
-                                               placeholder=False, **PAPER_STYLE)
+                                               placeholder=False,
+                                               **PAPER_STYLE_FIG123)
     _abc_axes = [axA, axB, axC]
 
     # The Y_L node the tables actually carry (the getters read there).
@@ -1794,11 +1807,11 @@ def _draw_f4_panel(ax, FN_SET, pan, panel_lab, set_label):
 _F4_SETS = [('Set A', quark_param_sets[0]), ('Set B', quark_param_sets[1])]
 
 # square=False: let each panel fill its slot so leftover width becomes panel
-# instead of gutter. aspect=1.0 makes the figure 7.0x7.0", landing the unpinned
-# panels at W/H ~ 1.06 -- square to the eye, no slack.
+# instead of gutter -- the ~0.6" between the columns is the right column's
+# y-label and tick numbers, which is ink, not waste.
 fig, ((axA, axB), (axC, axD)) = paper_grid('2x2', mode='double',
                                            placeholder=False, square=False,
-                                           **(PAPER_STYLE | {'aspect': 1.0}))
+                                           **PAPER_STYLE)
 (_nameA, _setA), (_nameB, _setB) = _F4_SETS
 _scA, _sgsA = _draw_f4_panel(axA, _setA, PNS_T0,   '(a)', _nameA)
 _draw_f4_panel(axB, _setA, PNS_TMAX, '(b)', _nameA)
@@ -2328,135 +2341,200 @@ print(f"  saved table_outcomes_{xsd_tag}.csv / .tex")
 # | V.4 | What happens with no CFL pairing at all? |
 
 # %% [markdown]
-# ## V.1 — The viable region as stars: $M$–$R$ and $P_{\rm CFL}(\mu_B)$
+# ## V.1 — The viable region as stars: does $\sigma_{\rm crit}$ show up in an observable?
 #
-# Companion to Fig. 5. Every $\sigma_{\rm crit}$-viable $(B^{1/4},\Delta_0)$ cell
-# is replayed into a cold CFL equation of state and a TOV sequence, and drawn
-# **coloured by its own $\sigma_{\rm crit}$ on the same viridis scale as the
-# Fig. 5 heatmap** — so a colour means the same surface tension in both figures.
+# Fig. 5 shows $\sigma_{\rm crit}$ over an abstract parameter plane. The question
+# a reader will ask next is whether that plane connects to anything measurable —
+# and this figure is built to answer it, not just to look at the bundle.
 #
-# **(a)** the $M$–$R$ bundle over the hadronic reference (black); **(b)** the
-# same cells as $P(\mu_B)$, which is the plane the no-rehadronization filter
-# works in; **(c)** one point per cell instead of one curve, $(R_{1.4},
-# M_{\max})$, because a thousand overlapping lines hide exactly the ordering the
-# figure is meant to show.
+# **(a, b)** every accepted cell replayed into a mass–radius curve and its
+# equation of state, binned by $\sigma_{\rm crit}$ into equal-**count** groups and
+# drawn as a median with a p16–p84 envelope. Equal-count rather than equal-width
+# because $\sigma_{\rm crit}$ is far from uniform over the plane, and a band over
+# three cells next to one over three hundred invites the wrong comparison. Each
+# band takes its colour at its median $\sigma_{\rm crit}$ on the **Fig. 5 scale**,
+# so a colour means the same surface tension in both figures. The two parameter
+# sets carried through the paper are drawn on top in their Fig. 2 colours.
+#
+# **(c, d)** the point of the figure: $\sigma_{\rm crit}$ against a stellar
+# observable, one point per parameter set, with a running median and a Spearman
+# rank correlation. Colour is no longer carrying the quantity — it is on an axis,
+# where a correlation can actually be read. If $\rho$ is large, then measuring
+# that observable **bounds the quark–hadron surface tension**; if it is near
+# zero, the two are independent and no radius measurement will help.
+#
+# Rank correlation rather than Pearson: the relation need not be linear, and
+# $\rho$ only asks whether it is monotone.
 
 # %%
 # =============================================================================
-#  Fig 5a: M-R and P_CFL(mu_B) for the sigma_crit-viable cells, coloured by
-#  sigma_crit on the SAME scale as Fig 5 (_vmin8/_vmax8, set in IV.5).
+#  V.1 knobs.
 # =============================================================================
-set_paper_style()
-F8B_ALPHAS     = [0, 1, 2]     # alpha_s slice indices to include
-F8B_MAX_CURVES = None          # even subsample of viable cells (None = all)
-# Keep only cells whose sigma_crit AND M_max fall in these windows; (-inf, inf)
-# means no cut. Both cuts are applied BEFORE the replay, and replay_accepted
-# treats a non-finite sigma_crit as "not accepted" -- so a narrow window is
-# proportionally CHEAPER, not merely sparser.
-F8B_SIG_RANGE  = (-np.inf, 150)      # sigma_crit window [MeV/fm^2]
-F8B_MMAX_RANGE = (2, 2.6)            # M_max window [M_sun]
-F8B_MODE  = 'curves'           # 'curves' (one line per cell) | 'bands'
-F8B_NBIN  = 10                 # sigma_crit bins when MODE == 'bands'
-F8C_RDEF  = 'R_1.4'            # scatter radius: 'R_Mmax' | 'R_1.4' | 'R_max'
+V1_NBINS      = 5                 # equal-count sigma_crit bins drawn as bands
+V1_MAX_CURVES = 60 if REDUCED_GRID else 400   # even subsample of accepted cells
+V1_RDEF       = 'R_1.4'           # radius in (c): 'R_1.4' | 'R_Mmax' | 'R_max'
+                                  #   R_1.4 is what NICER-type measurements
+                                  #   pin; R_max runs to ~22 km in the
+                                  #   low-B4 corner and stretches the panel.
+V1_MED_BINS   = 8                 # bins behind the running median in (c), (d)
+# Keep only cells whose sigma_crit and M_max fall in these windows. Both cuts are
+# applied BEFORE the replay -- replay_accepted treats a non-finite sigma_crit as
+# "not accepted" -- so a narrow window is proportionally CHEAPER, not just sparser.
+V1_SIG_RANGE  = (-np.inf, np.inf)  # sigma_crit window [MeV/fm^2]
+V1_MMAX_RANGE = (-np.inf, np.inf)  # M_max window [M_sun]
 
-_al_idx = [i for i in F8B_ALPHAS if i < len(_al8)]
-_s8b, _m8b = _SIG8[_al_idx], _MM8[_al_idx]
-_keep8b = (np.isfinite(_s8b) &
-           (_s8b >= F8B_SIG_RANGE[0]) & (_s8b <= F8B_SIG_RANGE[1]) &
-           (_m8b >= F8B_MMAX_RANGE[0]) & (_m8b <= F8B_MMAX_RANGE[1]))
-print(f"Fig 5a: {_keep8b.sum()}/{np.isfinite(_s8b).sum()} viable cells kept "
-      f"(sigma_crit in {F8B_SIG_RANGE}, M_max in {F8B_MMAX_RANGE})")
-_f8b_curves = replay_accepted(np.where(_keep8b, _s8b, np.nan),
-                              _al8[_al_idx], _B48, _D08, filt_cfg,
-                              max_curves=F8B_MAX_CURVES, n_jobs=SCAN['n_jobs'])
-# Deliberately the FULL Fig-5 range, so a colour means the same sigma_crit in
-# both figures. If a narrow SIG_RANGE leaves the bundle near-monochrome, swap in
-# Normalize(*F8B_SIG_RANGE) to stretch the colours across the window instead.
-_norm8 = Normalize(vmin=_vmin8, vmax=_vmax8)
-_cmap8 = plt.cm.viridis
-# Draw low sigma_crit first so high sigma_crit ends up ON TOP: in 'curves' mode
-# the topmost line is the only one visible, and without a sort that choice is
-# whatever order the grid cells happened to come back in.
-_f8b_curves = sorted(_f8b_curves, key=lambda t: t[1])
+_v1_keep = (np.isfinite(SIG) &
+            (SIG >= V1_SIG_RANGE[0]) & (SIG <= V1_SIG_RANGE[1]) &
+            (MMAX >= V1_MMAX_RANGE[0]) & (MMAX <= V1_MMAX_RANGE[1]))
+print(f"V.1: {int(_v1_keep.sum())}/{int(np.isfinite(SIG).sum())} viable cells "
+      f"kept (sigma_crit in {V1_SIG_RANGE}, M_max in {V1_MMAX_RANGE})")
 
-# 2x2: (a) M-R, (b) P_CFL(mu_B), (c) the summary scatter, (d) the colorbar.
-fig, _axes = paper_grid('2x2', mode='double', placeholder=False, square=False,
-                        **(PAPER_STYLE | {'aspect': 1.0}))
-axMR, axP, axS, _axCB = _axes.flat
-# The 4th quadrant holds the colorbar rather than being hidden: attaching the
-# bar to the three data panels would stretch it over the whole figure height.
-# Frame off, but the axes keeps its slot so constrained_layout stays square.
-_axCB.set_frame_on(False); _axCB.set_xticks([]); _axCB.set_yticks([])
-_bins = quantile_bins(_f8b_curves, F8B_NBIN, _cmap8,
-                      _norm8) if F8B_MODE == 'bands' else []
+_curves = replay_accepted(np.where(_v1_keep, SIG, np.nan), AL, B4G, D0G,
+                          filt_cfg, max_curves=V1_MAX_CURVES,
+                          n_jobs=SCAN['n_jobs'], verbose=True)
+# Draw low sigma_crit first so high sigma_crit ends up on top; without a sort
+# that ordering is whatever the grid cells happened to come back in.
+_curves = sorted(_curves, key=lambda t: t[1])
 
-# (a) M-R: hadronic reference (black) + the 2 M_sun guide + the CFL bundle
-_hadr, = axMR.plot(tov_cold[:, TOV_COL['R']], tov_cold[:, TOV_COL['M']], 'k-',
-                   lw=2, label='Hadronic (T=0)', zorder=5)
-axMR.axhline(2.0, color='0.5', ls=':', lw=1.0, zorder=1)
-if F8B_MODE == 'bands':
-    _Mg = np.linspace(0.4, max(np.nanmax(c['M']) for c, _ in _f8b_curves), 160)
-    for _lo, _hi, _mem, _col in _bins:
-        band(axMR, resample_profiles(_mem, 'M', 'R', _Mg, stable=True), _Mg,
-             _col, f'{_lo:.0f}-{_hi:.0f}', swap=True)
+
+def _running_median(x, y, n_bins):
+    """Median of y in equal-count bins of x, plus the p16-p84 spread.
+
+    A scatter of a few hundred points shows whether a trend EXISTS; the running
+    median shows its shape. Equal-count bins keep every point of the curve
+    backed by the same number of cells, so a sparse tail cannot masquerade as
+    structure. Bins holding fewer than 3 points are dropped for that reason.
+    """
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    ok = np.isfinite(x) & np.isfinite(y)
+    x, y = x[ok], y[ok]
+    if x.size < 2 * n_bins:
+        return np.array([]), np.array([]), np.array([]), np.array([])
+    edges = np.quantile(x, np.linspace(0, 1, n_bins + 1))
+    edges[-1] = np.nextafter(edges[-1], np.inf)
+    xc, med, lo, hi = [], [], [], []
+    for k in range(n_bins):
+        m = (x >= edges[k]) & (x < edges[k + 1])
+        if m.sum() < 3:
+            continue
+        xc.append(np.median(x[m]))
+        med.append(np.median(y[m]))
+        lo.append(np.percentile(y[m], 16))
+        hi.append(np.percentile(y[m], 84))
+    return (np.array(xc), np.array(med), np.array(lo), np.array(hi))
+
+
+def _corr_panel(ax, x, y, xlabel, colour):
+    """sigma_crit against one observable: points, running median, Spearman rho."""
+    ok = np.isfinite(x) & np.isfinite(y)
+    ax.scatter(x[ok], y[ok], s=10, lw=0, alpha=0.45, color=colour, zorder=2)
+    _xc, _md, _lo, _hi = _running_median(x[ok], y[ok], V1_MED_BINS)
+    if _xc.size:
+        ax.fill_between(_xc, _lo, _hi, color=colour, alpha=0.22, lw=0, zorder=3)
+        ax.plot(_xc, _md, color=colour, lw=1.8, zorder=4)
+    if ok.sum() > 3:
+        _rho, _p = spearmanr(x[ok], y[ok])
+        # p is reported as an upper bound below 1e-3: the exact value of a tiny
+        # p-value over a few hundred grid cells is not meaningful, the sign and
+        # size of rho are.
+        _ptxt = 'p < 0.001' if _p < 1e-3 else f'p = {_p:.3f}'
+        ax.text(0.04, 0.94, rf'$\rho = {_rho:+.2f}$' + f'\n{_ptxt}',
+                transform=ax.transAxes, va='top', ha='left', fontsize=8,
+                bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='0.8',
+                          alpha=0.85), zorder=6)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(r'$\sigma_{\rm crit}^{\rm star}$ [MeV/fm$^2$]')
+
+
+if len(_curves) >= 4:
+    fig, ((axA, axB), (axC, axD)) = paper_grid(
+        '2x2', mode='double', placeholder=False, **PAPER_STYLE)
+    _norm = Normalize(SIG_VMIN, SIG_VMAX)      # == the Fig. 5 heatmap scale
+    _cmap = plt.get_cmap('viridis')
+    _bins = quantile_bins(_curves, V1_NBINS, _cmap, _norm)
+
+    # --- (a) M-R -------------------------------------------------------------
+    # R is interpolated at fixed M -- the single-valued direction on the stable
+    # branch -- but plotted horizontally, hence swap=True.
+    _Mg = np.linspace(0.6, 2.6, 60)
+    for _lo, _hi, _members, _col in _bins:
+        band(axA, resample_profiles(_members, 'M', 'R', _Mg, stable=True), _Mg,
+             _col, swap=True)
+    # The constraint blobs are context, not the subject: they go on WITHOUT
+    # labels of either kind (inline names collided with the bands; legend
+    # entries put five pulsars in a box titled "sigma_crit"). Fig. 2(a) is where
+    # they are identified -- this panel only needs to show where the viable
+    # stars fall relative to them.
+    add_observational_constraints(axA, show_mass_bands=False,
+                                  inline_labels=False)
+    # The two sets the paper follows, so the reader can locate them in the bundle.
+    for _k, _p in enumerate(quark_param_sets):
+        _rc = replay_cfl(_p['alpha'], _p['B4'], _p['Delta0'], filt_cfg)
+        if _rc is None:
+            continue
+        axA.plot(_rc['R'], _rc['M'], color=_QS_GREENS[_k % len(_QS_GREENS)],
+                 lw=1.6, ls='--', zorder=6)
+        axB.plot(_rc['mu'], _rc['P'],
+                 color=_QS_GREENS[_k % len(_QS_GREENS)], lw=1.6, ls='--',
+                 zorder=6)
+    axA.set_xlabel(r'$R$ [km]'); axA.set_ylabel(r'$M$ [$M_\odot$]')
+    axA.set_xlim(8, 14); axA.set_ylim(0.5, 2.8)
+    # Explicit handles, so nothing the constraint overlay registers can leak
+    # into a legend that is about sigma_crit.
+    axA.legend(handles=([Line2D([], [], color=_c, lw=1.7,
+                                label=rf'{_lo:.0f}-{_hi:.0f}')
+                         for _lo, _hi, _, _c in _bins]
+                        + [Line2D([], [], color=_QS_GREENS[_k % len(_QS_GREENS)],
+                                  lw=1.6, ls='--',
+                                  label=rf"$B^{{1/4}}\!=\!{_p['B4']:.0f}$, "
+                                        rf"$\Delta_0\!=\!{_p['Delta0']:.0f}$")
+                           for _k, _p in enumerate(quark_param_sets)]),
+               loc='lower right', title=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]',
+               fontsize=PAPER_STYLE['legendsize'] - 2,
+               title_fontsize=PAPER_STYLE['legendsize'] - 1, framealpha=0.92)
+    panel_label(axA, '(a)')
+
+    # --- (b) the equation of state behind those curves -----------------------
+    # Same plane the no-rehadronization filter works in: a viable set must stay
+    # above the hadronic comparator past their crossing.
+    _mug = np.linspace(900, 1600, 80)
+    for _lo, _hi, _members, _col in _bins:
+        band(axB, resample_profiles(_members, 'mu', 'P', _mug), _mug, _col)
+    axB.plot(filt_cfg.mu_B_H_sorted, filt_cfg.P_H_sorted, 'k-', lw=1.6,
+             zorder=5, label=r'$P_H\ (T\approx0)$')
+    axB.set_xlabel(r'$\mu_B$ [MeV]')
+    axB.set_ylabel(r'$P$ [MeV fm$^{-3}$]')
+    axB.set_xlim(_mug.min(), _mug.max())
+    axB.legend(loc='lower right', fontsize=PAPER_STYLE['legendsize'] - 1)
+    panel_label(axB, '(b)')
+
+    # --- (c, d) sigma_crit against an observable -----------------------------
+    _pts = summary_points(_curves, V1_RDEF)          # (M_max, R) per cell
+    _sc = np.array([s for _, s in _curves])
+    _RLAB = {'R_Mmax': r'$R(M_{\max})$', 'R_1.4': r'$R_{1.4}$',
+             'R_max': r'$R_{\max}$'}
+    _corr_panel(axC, _pts[:, 1], _sc, _RLAB[V1_RDEF] + ' [km]', OKAB['blue'])
+    _corr_panel(axD, _pts[:, 0], _sc, r'$M_{\max}$ [$M_\odot$]',
+                OKAB['vermillion'])
+    axD.axvline(2.0, color='0.5', ls=':', lw=1.0, zorder=1)   # the M_max filter
+    panel_label(axC, '(c)'); panel_label(axD, '(d)')
+
+    pd.DataFrame({'M_max_Msun': _pts[:, 0], f'{V1_RDEF}_km': _pts[:, 1],
+                  'sigma_crit_star': _sc}).to_csv(
+        FIG_D / f'supp_viable_region_stars_{xsd_tag}.csv', index=False)
+    save_paper_figure(fig, f'supp_viable_region_stars_{xsd_tag}', supp=True)
+    plt.show()
+
+    # The numbers the panels are claiming, printed so they can be quoted.
+    for _lbl, _x in ((_RLAB[V1_RDEF], _pts[:, 1]), ('M_max', _pts[:, 0])):
+        _ok = np.isfinite(_x) & np.isfinite(_sc)
+        if _ok.sum() > 3:
+            _r, _pv = spearmanr(_x[_ok], _sc[_ok])
+            print(f"  sigma_crit vs {_lbl:12s}: Spearman rho = {_r:+.3f} "
+                  f"(p = {_pv:.2e}, n = {int(_ok.sum())})")
 else:
-    for _c, _sc in _f8b_curves:
-        axMR.plot(_c['R'], _c['M'], color=_cmap8(_norm8(_sc)), lw=0.6, alpha=0.8)
-axMR.set_xlim(7, 16); axMR.set_ylim(0, 3.0)
-axMR.set_xlabel(r'$R$ [km]'); axMR.set_ylabel(r'$M$ [$M_\odot$]')
-# TWO legends, not one: the hadronic curve is not a sigma_crit bin, so folding
-# it in would file "Hadronic" under a "sigma_crit" heading. Corners are explicit
-# rather than loc='best', which ignores Text and sometimes lands on the (a) tag.
-_lg_h = axMR.legend(handles=[_hadr], loc='upper right', fontsize=8)
-if F8B_MODE == 'bands':
-    axMR.add_artist(_lg_h)                  # keep it when the second is added
-    axMR.legend(loc='lower left', fontsize=8,
-                title=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]',
-                handles=[Line2D([], [], color=c, lw=1.7,
-                                label=f'{lo:.0f}-{hi:.0f}')
-                         for lo, hi, _, c in _bins])
-panel_label(axMR, '(a)')
-
-# (b) P_CFL(mu_B): the hadronic comparator (black) + the same bundle
-axP.plot(filt_cfg.mu_B_H_sorted, filt_cfg.P_H_sorted, 'k-', lw=2,
-         label=r'$P_H\ (T\approx0)$', zorder=5)
-if F8B_MODE == 'bands':
-    _mug = np.linspace(min(np.nanmin(c['mu']) for c, _ in _f8b_curves),
-                       max(np.nanmax(c['mu']) for c, _ in _f8b_curves), 200)
-    for _lo, _hi, _mem, _col in _bins:
-        band(axP, resample_profiles(_mem, 'mu', 'P', _mug), _mug, _col, None)
-else:
-    for _c, _sc in _f8b_curves:
-        axP.plot(_c['mu'], _c['P'], color=_cmap8(_norm8(_sc)), lw=0.6, alpha=0.8)
-axP.set_xlabel(r'$\mu_B$ [MeV]'); axP.set_ylabel(r'$P$ [MeV/fm$^3$]')
-axP.legend(loc='lower right')             # 'upper left' is where the (b) tag is
-panel_label(axP, '(b)')
-
-# (c) one POINT per parametrization instead of one curve -- no overplotting, so
-#     the sigma_crit colour is directly readable. Same orientation as (a), so
-#     the two panels can be compared without flipping your head.
-_MS = summary_points(_f8b_curves, F8C_RDEF)          # (M_max, R) per curve
-_SS = np.array([sc for _, sc in _f8b_curves])
-_fin = np.isfinite(_MS[:, 1])
-axS.axhline(2.0, color='0.5', ls=':', lw=1.0, zorder=1)
-_sca = axS.scatter(_MS[_fin, 1], _MS[_fin, 0], c=_SS[_fin], cmap=_cmap8,
-                   norm=_norm8, s=9, lw=0, alpha=0.85, zorder=3)
-_RLAB = {'R_Mmax': r'$R(M_{\max})$', 'R_1.4': r'$R_{1.4}$',
-         'R_max': r'$R_{\max}$'}
-axS.set_xlabel(_RLAB[F8C_RDEF] + ' [km]')
-axS.set_ylabel(r'$M_{\max}$ [$M_\odot$]')
-panel_label(axS, '(c)')
-if (~_fin).any():                                    # only possible for R_1.4
-    print(f"(c) {(~_fin).sum()}/{len(_fin)} curves have no {F8C_RDEF} "
-          f"(the branch never reaches 1.4 M_sun) and are not plotted")
-
-fig.colorbar(_sca, cax=_axCB.inset_axes([0.04, 0.03, 0.07, 0.94]),
-             label=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]')
-pd.DataFrame({'M_max_Msun': _MS[:, 0], f'{F8C_RDEF}_km': _MS[:, 1],
-              'sigma_crit_star': _SS}).to_csv(
-    FIG_D / f'fig5a_viable_summary_{xsd_tag}.csv', index=False)
-save_paper_figure(fig, f'paper_fig5a_MR_PmuB_sigmacrit_{xsd_tag}', supp=True)
-plt.show()
+    print("too few accepted cells to draw the bundle "
+          "(expected on the smoke grid); rerun with REDUCED_GRID=False")
 
 # %% [markdown]
 # ## V.2 — $\Delta\sigma_{\rm crit}$: sensitivity to $M_{T0}$ and to the phase
@@ -2562,9 +2640,41 @@ def _dsig_row(label, s):
             f"{s['lo']:>+9.2f}..{s['hi']:<+8.2f}{s['rel_m']:>+7.1f}%")
 
 
-def _dsig_panel(ax, D, B4, D0, vlim, title):
-    """One difference panel in the Fig-5 plane. Returns the mesh for a colorbar."""
+def _dsig_panel(ax, D, B4, D0, vlim, title, *, lost=None, gained=None):
+    """One difference panel in the Fig-5 plane.
+
+    Three things are drawn on top of the difference itself, because a bare
+    diverging map hides the most interesting part of a sensitivity test:
+
+    * **lost / gained cells** (black / white outline) -- parameter sets that are
+      viable in one scan but not the other. A raised M_T0 pushes cells out of
+      viability entirely, and those cells have NO Delta to colour: they read as
+      grey no-data unless the boundary is drawn.
+    * **the two paper parameter sets**, so the reader can see whether the shift
+      matters where it matters.
+    * **the median and p16-p84 spread**, printed in the corner. It is the number
+      the caption wants and the eye cannot get off a colour scale.
+
+    Returns the mesh, for a colorbar.
+    """
     pcm = diverging_map(ax, B4, D0, D, vlim)
+    if lost is not None and lost.any():
+        ax.contour(B4, D0, lost.astype(float), levels=[0.5], colors='k',
+                   linewidths=1.3, zorder=5)
+    if gained is not None and gained.any():
+        ax.contour(B4, D0, gained.astype(float), levels=[0.5], colors='white',
+                   linewidths=1.3, zorder=5)
+    for _p in quark_param_sets:                     # the sets the paper follows
+        ax.plot(_p['B4'], _p['Delta0'], marker='*', ms=11, color='yellow',
+                mec='k', mew=0.6, ls='none', zorder=7)
+    _f = D[np.isfinite(D)]
+    if _f.size:
+        _md, _lo, _hi = np.median(_f), *np.percentile(_f, [16, 84])
+        ax.text(0.03, 0.03,
+                rf'median ${_md:+.1f}$' '\n' rf'p16-p84 ${_lo:+.1f}\,..\,{_hi:+.1f}$',
+                transform=ax.transAxes, va='bottom', ha='left', fontsize=7.5,
+                bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='0.8',
+                          alpha=0.85), zorder=8)
     ax.set_xlabel(r'$B^{1/4}$ [MeV]'); ax.set_ylabel(r'$\Delta_0$ [MeV]')
     ax.set_xlim(B4.min(), B4.max()); ax.set_ylim(0.1, D0.max())
     ax.set_title(title)
@@ -2594,22 +2704,34 @@ else:
 if _dA:
     _vA = symmetric_vlim([_D[_ia] for _, _D, _ in _dA], pct=DSIG_PCT,
                          override=DSIG_VLIM)
-    fig, _axA = paper_grid('2x2', mode='double', placeholder=False,
-                           square=False, **(PAPER_STYLE | {'aspect': 1.0}))
+    # Layout follows the panel COUNT: two comparisons in a 2x2 left two blank
+    # quadrants and shrank the maps for nothing.
+    fig, _axA = paper_grid('1x2' if len(_dA) <= 2 else '2x2', mode='double',
+                           placeholder=False, square=False,
+                           **(PAPER_STYLE | {'aspect': 1.0}))
     _axAf = list(_axA.flat)
     _pcm = None
     for _k, (_mt, _D, _) in enumerate(_dA[:len(_axAf)]):
+        # A cell viable at the baseline but not at this M_T0 has no difference
+        # to colour: outline it, or the accept region silently shrinking looks
+        # the same as a cell that was never viable.
+        _gk = load_scan(_mt, phase=DSIG_PHASE)
+        _lost = np.isfinite(_ref['sig_crit'][_ia]) & ~np.isfinite(_gk['sig_crit'][_ia])
+        _gain = ~np.isfinite(_ref['sig_crit'][_ia]) & np.isfinite(_gk['sig_crit'][_ia])
         _pcm = _dsig_panel(_axAf[_k], _D[_ia], _B4d, _D0d, _vA,
-                           rf"$M_{{T0}}={_mt:g}\,M_\odot$")
+                           rf"$M_{{T0}}={_mt:g}\,M_\odot$",
+                           lost=_lost, gained=_gain)
         panel_label(_axAf[_k], f"({chr(97 + _k)})")
-    for _ax in _axAf[len(_dA):]:                    # unused panels of the 2x2
+    for _ax in _axAf[len(_dA):]:                    # unused panels of a 2x2
         _ax.set_visible(False)
     fig.colorbar(_pcm, ax=_axA,
                  label=(rf'$\sigma_{{\rm crit}}(M_{{T0}}) - '
                         rf'\sigma_{{\rm crit}}({DSIG_REF_MT0:g})$'
                         r' [MeV/fm$^2$]'), fraction=0.046, pad=0.02)
     fig.suptitle(rf"$\alpha_s=\pi/2\times{_ald[_ia]/(np.pi/2):.1f}$, "
-                 rf"{DSIG_PHASE}", fontsize=10)
+                 rf"{DSIG_PHASE} — black outline: viable at "
+                 rf"$M_{{T0}}={DSIG_REF_MT0:g}$ but not here; "
+                 rf"stars: the two paper sets", fontsize=8)
     save_paper_figure(fig, f'dsigma_MT0_{xsd_tag}_{DSIG_PHASE}', supp=True)
     plt.show()
 
@@ -2631,8 +2753,11 @@ else:
     fig, _axB = paper_grid('1x2', mode='double', placeholder=False,
                            square=False, **(PAPER_STYLE | {'aspect': 1.0}))
     for _c, _i in enumerate(_shw[:2]):
+        _lostB = np.isfinite(_gA['sig_crit'][_i]) & ~np.isfinite(_gB['sig_crit'][_i])
+        _gainB = ~np.isfinite(_gA['sig_crit'][_i]) & np.isfinite(_gB['sig_crit'][_i])
         _pcmB = _dsig_panel(_axB[0, _c], _DB[_i], _B4b, _D0b, _vB,
-                            rf"$\alpha_s=\pi/2\times{_alb[_i]/(np.pi/2):.1f}$")
+                            rf"$\alpha_s=\pi/2\times{_alb[_i]/(np.pi/2):.1f}$",
+                            lost=_lostB, gained=_gainB)
         panel_label(_axB[0, _c], f"({chr(97 + _c)})")
     fig.colorbar(_pcmB, ax=_axB,
                  label=(rf'$\sigma_{{\rm crit}}$({_pA}) $-\ '
