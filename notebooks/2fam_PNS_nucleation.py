@@ -456,6 +456,30 @@ SCAN = dict(
     n_jobs=-1,
 )
 
+# Where a scanned grid lives, and how to read one back. Defined HERE, in Part I,
+# because both II.8 (which skips a scan whose file already exists) and III.5
+# (which loads them for the figures) need the same convention -- and a scan that
+# writes one path while the loader reads another silently rescans for hours.
+SCAN_PATH_FMT = str(DIRS['sigma_crit'] /
+                    'sigma_crit_grid_{xsd}_MT0{MT0:.2f}_{flavor}-{charge}-{phase}.npz')
+
+
+def scan_path(MT0, flavor=MAIN_FLAVOR, charge=MAIN_CHARGE, phase=MAIN_PHASE):
+    """Path of one saved sigma_crit grid (it need not exist yet)."""
+    return Path(SCAN_PATH_FMT.format(xsd=xsd_tag, MT0=MT0, flavor=flavor,
+                                     charge=charge, phase=phase))
+
+
+def load_scan(MT0, flavor=MAIN_FLAVOR, charge=MAIN_CHARGE, phase=MAIN_PHASE):
+    """One saved sigma_crit grid as a dict, or None if it was never scanned."""
+    path = scan_path(MT0, flavor, charge, phase)
+    if not path.exists():
+        return None
+    with np.load(path, allow_pickle=False) as z:
+        # .item() on the 0-d entries: ONE idiom, so a scalar never comes back as
+        # a 0-d array that then formats as 'array(1.4)' in a figure title.
+        return {k: (z[k].item() if z[k].ndim == 0 else z[k]) for k in z.files}
+
 # %% [markdown]
 # ## I.8 — Figure style and consistency checks
 #
@@ -890,33 +914,42 @@ star_scan = make_star_match(
                          f"tov_hadronic_trapped_2famphi_{xsd_tag}"
                          f"_YL{SCAN_SNAPSHOT['YLH']:.2f}_S{SCAN_SNAPSHOT['S']:.1f}.dat"))
 
-SCAN_PATH_FMT = str(DIRS['sigma_crit'] /
-                    'sigma_crit_grid_{xsd}_MT0{MT0:.2f}_{flavor}-{charge}-{phase}.npz')
-
 # Which (flavour, charge, phase) planes to scan. The first is the paper's main
 # method; the others support the method-comparison figures.
 SCAN_CASES = [(MAIN_FLAVOR, MAIN_CHARGE, MAIN_PHASE)]
 if not REDUCED_GRID:
     SCAN_CASES.append((MAIN_FLAVOR, MAIN_CHARGE, 'cfl'))
 
+# Scan only what is missing, then LOAD every grid -- computed or pre-existing --
+# into one dict. Skipping without loading is the trap this avoids: the cell
+# looks like it succeeded, `scan_grids` is empty, and the failure only shows up
+# several cells later as a KeyError with no hint that a scan was skipped.
+scan_grids = {}          # (flavor, charge, phase, MT0) -> grid dict
 for _flav, _chg, _ph in SCAN_CASES:
-    _todo = [m for m in MT0_GRID
-             if not Path(SCAN_PATH_FMT.format(xsd=xsd_tag, MT0=m, flavor=_flav,
-                                              charge=_chg, phase=_ph)).exists()]
-    if not _todo:
-        print(f"  [skip] {_flav}-{_chg}-{_ph}: all MT0 already scanned")
-        continue
-    print(f"\n-- sigma_crit scan: {_flav} / {_chg} / {_ph}  MT0={_todo} --")
-    print(f"   grid: {len(SCAN['alpha'])} alpha x {len(SCAN['B4'])} B4 "
-          f"x {len(SCAN['Delta0'])} Delta0, {N_SHELLS} shells")
-    run_sigma_crit_scan(
-        _todo, _flav, _chg, _ph,
-        SCAN['alpha'], SCAN['B4'], SCAN['Delta0'],
-        filt_cfg, nuc_cfg, star_scan,
-        n_jobs=SCAN['n_jobs'], save_path_fmt=SCAN_PATH_FMT, xsd_tag=xsd_tag,
-        n_shells=N_SHELLS, nB_shell_min=NB_SHELL_MIN)
+    _todo = [m for m in MT0_GRID if not scan_path(m, _flav, _chg, _ph).exists()]
+    if _todo:
+        print(f"\n-- sigma_crit scan: {_flav} / {_chg} / {_ph}  MT0={_todo} --")
+        print(f"   grid: {len(SCAN['alpha'])} alpha x {len(SCAN['B4'])} B4 "
+              f"x {len(SCAN['Delta0'])} Delta0, {N_SHELLS} shells")
+        run_sigma_crit_scan(
+            _todo, _flav, _chg, _ph,
+            SCAN['alpha'], SCAN['B4'], SCAN['Delta0'],
+            filt_cfg, nuc_cfg, star_scan,
+            n_jobs=SCAN['n_jobs'], save_path_fmt=SCAN_PATH_FMT, xsd_tag=xsd_tag,
+            n_shells=N_SHELLS, nB_shell_min=NB_SHELL_MIN)
+    for _m in MT0_GRID:
+        _g = load_scan(_m, _flav, _chg, _ph)
+        if _g is None:
+            print(f"  [MISSING] {_flav}-{_chg}-{_ph} MT0={_m:.2f} -- the scan "
+                  f"produced no file; downstream cells will skip it")
+            continue
+        scan_grids[(_flav, _chg, _ph, _m)] = _g
+        _n_ok = int(np.isfinite(_g['sig_crit']).sum())
+        print(f"  [{'computed' if _m in _todo else 'loaded  '}] "
+              f"{_flav}-{_chg}-{_ph} MT0={_m:.2f}: {_n_ok}/{_g['sig_crit'].size} "
+              f"cells with a finite sigma_crit")
 
-print("\nPart II complete.")
+print(f"\nPart II complete. {len(scan_grids)} sigma_crit grid(s) in memory.")
 
 # %% [markdown]
 # # Part III — Load
@@ -1020,18 +1053,8 @@ print(f"Q* tables available: {len(list(DIRS['Qstar'].glob('Qstar_*.dat')))}")
 # outcomes table needs.
 
 # %%
-def load_scan(MT0, flavor=MAIN_FLAVOR, charge=MAIN_CHARGE, phase=MAIN_PHASE):
-    """One saved sigma_crit grid as a dict, or None if it was never scanned."""
-    path = Path(SCAN_PATH_FMT.format(xsd=xsd_tag, MT0=MT0, flavor=flavor,
-                                     charge=charge, phase=phase))
-    if not path.exists():
-        return None
-    with np.load(path, allow_pickle=False) as z:
-        # .item() on the 0-d entries: ONE idiom, so a scalar never comes back as
-        # a 0-d array that then formats as 'array(1.4)' in a title.
-        return {k: (z[k].item() if z[k].ndim == 0 else z[k]) for k in z.files}
-
-
+# load_scan / scan_path come from Part I, so Part III stands alone without
+# re-running Part II and both parts agree on where a grid lives.
 SCAN_MT0 = MT0_REF          # the baseline grid Fig. 5 and the W*/T map draw
 scan_main = load_scan(SCAN_MT0)
 if scan_main is None:
