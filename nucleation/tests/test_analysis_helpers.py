@@ -255,3 +255,35 @@ def test_band_skips_thin_columns(ax):
     # the third column is backed by 1 curve -> dropped from the drawn band
     xs = ax.lines[0].get_xdata()
     assert len(xs) == 2
+
+
+def test_replay_accepted_can_return_the_parameters(monkeypatch):
+    """with_params must pair each curve with the cell it came from.
+
+    The pairing is the whole point: the accept ordering and the max_curves
+    stride live inside replay_accepted, so a caller reconstructing (alpha, B4,
+    Delta0) outside would silently drift out of step and mis-colour a plot with
+    no error anywhere.
+    """
+    import nucleation.analysis.replay as rp
+
+    # One accepted cell per (Delta0, B4) corner, with a known sigma_crit each.
+    sig = np.full((1, 2, 2), np.nan)
+    sig[0, 0, 0], sig[0, 1, 1] = 10.0, 20.0
+    alpha, B4, D0 = [0.1], np.array([140.0, 150.0]), np.array([50.0, 60.0])
+
+    # Stand in for the EoS+TOV solve: identify the curve by the params it got.
+    monkeypatch.setattr(rp, 'replay_cfl',
+                        lambda a, b, d, cfg: dict(mu=[a], P=[b], R=[d], M=[1.0]))
+
+    out = rp.replay_accepted(sig, alpha, B4, D0, cfg=None, n_jobs=1,
+                             verbose=False, with_params=True)
+    assert [(s, p) for _, s, p in out] == [(10.0, (0.1, 140.0, 50.0)),
+                                           (20.0, (0.1, 150.0, 60.0))]
+    # each curve carries the parameters it was actually solved at
+    assert [(c['P'][0], c['R'][0]) for c, _, _ in out] == [(140.0, 50.0),
+                                                           (150.0, 60.0)]
+    # default stays a 2-tuple, so every existing caller is untouched
+    assert all(len(t) == 2 for t in
+               rp.replay_accepted(sig, alpha, B4, D0, cfg=None, n_jobs=1,
+                                  verbose=False))

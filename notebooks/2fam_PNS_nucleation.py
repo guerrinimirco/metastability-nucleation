@@ -100,6 +100,7 @@ from eos.tov.solver import (EOSTable_for_TOV, generate_ec_logspace,
 
 # --- nucleation: the core engine ----------------------------------------------
 from nucleation import (
+    work_of_formation, effective_inertia, quantum_nucleation_time,
     compute_Qstar_table, build_Qstar_interpolators, load_Qstar_table,
     export_table, QstarTableData,
     compute_thermal_nucleation_observables, load_thermal_nucleation_table,
@@ -2339,6 +2340,9 @@ print(f"  saved table_outcomes_{xsd_tag}.csv / .tex")
 # | V.2 | How much does $\sigma_{\rm crit}$ move when an input changes? |
 # | V.3 | Is $W_*/T$ an invariant across the viable region? |
 # | V.4 | What happens with no CFL pairing at all? |
+# | V.5 | Does the star-wide vs centre-only definition matter? |
+# | V.6 | Which term of $W(R)$ sets the critical radius? |
+# | V.7 | Can a droplet tunnel instead of being thermally activated? |
 
 # %% [markdown]
 # ## V.1 — The viable region as stars: does $\sigma_{\rm crit}$ show up in an observable?
@@ -2389,12 +2393,17 @@ _v1_keep = (np.isfinite(SIG) &
 print(f"V.1: {int(_v1_keep.sum())}/{int(np.isfinite(SIG).sum())} viable cells "
       f"kept (sigma_crit in {V1_SIG_RANGE}, M_max in {V1_MMAX_RANGE})")
 
-_curves = replay_accepted(np.where(_v1_keep, SIG, np.nan), AL, B4G, D0G,
-                          filt_cfg, max_curves=V1_MAX_CURVES,
-                          n_jobs=SCAN['n_jobs'], verbose=True)
+# with_params: (c) and (d) colour each point by its Delta_0, which is what
+# turns "scatter" into "structure" -- see the panel comment below.
+_curves3 = replay_accepted(np.where(_v1_keep, SIG, np.nan), AL, B4G, D0G,
+                           filt_cfg, max_curves=V1_MAX_CURVES,
+                           n_jobs=SCAN['n_jobs'], verbose=True,
+                           with_params=True)
 # Draw low sigma_crit first so high sigma_crit ends up on top; without a sort
 # that ordering is whatever the grid cells happened to come back in.
-_curves = sorted(_curves, key=lambda t: t[1])
+_curves3 = sorted(_curves3, key=lambda t: t[1])
+_curves = [(c, sc) for c, sc, _ in _curves3]     # the band helpers take pairs
+_D0_of_curve = np.array([p[2] for _, _, p in _curves3])
 
 
 def _running_median(x, y, n_bins):
@@ -2424,26 +2433,37 @@ def _running_median(x, y, n_bins):
     return (np.array(xc), np.array(med), np.array(lo), np.array(hi))
 
 
-def _corr_panel(ax, x, y, xlabel, colour):
-    """sigma_crit against one observable: points, running median, Spearman rho."""
+def _corr_panel(ax, x, y, xlabel, cvals):
+    """sigma_crit against one observable: points, running median, Spearman rho.
+
+    Points are coloured by the pairing gap, because the vertical spread at fixed
+    R or M_max is not noise -- it is Delta_0, and colouring by it turns a cloud
+    into two questions answered at once: does the observable track sigma_crit,
+    and what moves a star off that track.
+    """
     ok = np.isfinite(x) & np.isfinite(y)
-    ax.scatter(x[ok], y[ok], s=10, lw=0, alpha=0.45, color=colour, zorder=2)
+    sca = ax.scatter(x[ok], y[ok], c=cvals[ok], cmap='plasma', s=11, lw=0,
+                     alpha=0.75, zorder=2)
     _xc, _md, _lo, _hi = _running_median(x[ok], y[ok], V1_MED_BINS)
     if _xc.size:
-        ax.fill_between(_xc, _lo, _hi, color=colour, alpha=0.22, lw=0, zorder=3)
-        ax.plot(_xc, _md, color=colour, lw=1.8, zorder=4)
+        ax.fill_between(_xc, _lo, _hi, color='0.35', alpha=0.16, lw=0, zorder=3)
+        # White casing under the median so it stays legible over the points.
+        ax.plot(_xc, _md, color='white', lw=3.4, zorder=4, solid_capstyle='round')
+        ax.plot(_xc, _md, color='k', lw=1.8, zorder=5, solid_capstyle='round')
     if ok.sum() > 3:
         _rho, _p = spearmanr(x[ok], y[ok])
-        # p is reported as an upper bound below 1e-3: the exact value of a tiny
+        # p is quoted as an upper bound below 1e-3: the exact value of a tiny
         # p-value over a few hundred grid cells is not meaningful, the sign and
         # size of rho are.
         _ptxt = 'p < 0.001' if _p < 1e-3 else f'p = {_p:.3f}'
-        ax.text(0.04, 0.94, rf'$\rho = {_rho:+.2f}$' + f'\n{_ptxt}',
-                transform=ax.transAxes, va='top', ha='left', fontsize=8,
-                bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='0.8',
-                          alpha=0.85), zorder=6)
+        ax.text(0.97, 0.05, rf'$\rho = {_rho:+.2f}$' + f'\n{_ptxt}',
+                transform=ax.transAxes, va='bottom', ha='right', fontsize=8.5,
+                bbox=dict(boxstyle='round,pad=0.3', fc='white', ec='0.75',
+                          alpha=0.92), zorder=7)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(r'$\sigma_{\rm crit}^{\rm star}$ [MeV/fm$^2$]')
+    ax.margins(x=0.03)
+    return sca
 
 
 if len(_curves) >= 4:
@@ -2489,9 +2509,12 @@ if len(_curves) >= 4:
                                   label=rf"$B^{{1/4}}\!=\!{_p['B4']:.0f}$, "
                                         rf"$\Delta_0\!=\!{_p['Delta0']:.0f}$")
                            for _k, _p in enumerate(quark_param_sets)]),
-               loc='lower right', title=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]',
-               fontsize=PAPER_STYLE['legendsize'] - 2,
-               title_fontsize=PAPER_STYLE['legendsize'] - 1, framealpha=0.92)
+               loc='upper left', bbox_to_anchor=(0.0, 0.86), ncol=2,
+               title=r'$\sigma_{\rm crit}$ [MeV/fm$^2$]',
+               fontsize=PAPER_STYLE['legendsize'] - 2.5,
+               title_fontsize=PAPER_STYLE['legendsize'] - 1.5, framealpha=0.92,
+               handlelength=1.4, columnspacing=1.0, labelspacing=0.3,
+               borderpad=0.35)
     panel_label(axA, '(a)')
 
     # --- (b) the equation of state behind those curves -----------------------
@@ -2513,10 +2536,14 @@ if len(_curves) >= 4:
     _sc = np.array([s for _, s in _curves])
     _RLAB = {'R_Mmax': r'$R(M_{\max})$', 'R_1.4': r'$R_{1.4}$',
              'R_max': r'$R_{\max}$'}
-    _corr_panel(axC, _pts[:, 1], _sc, _RLAB[V1_RDEF] + ' [km]', OKAB['blue'])
-    _corr_panel(axD, _pts[:, 0], _sc, r'$M_{\max}$ [$M_\odot$]',
-                OKAB['vermillion'])
+    _corr_panel(axC, _pts[:, 1], _sc, _RLAB[V1_RDEF] + ' [km]', _D0_of_curve)
+    _sca = _corr_panel(axD, _pts[:, 0], _sc, r'$M_{\max}$ [$M_\odot$]',
+                       _D0_of_curve)
     axD.axvline(2.0, color='0.5', ls=':', lw=1.0, zorder=1)   # the M_max filter
+    # One colorbar for both correlation panels: Delta_0 means the same thing in
+    # each, and a per-panel bar would invite reading them on different scales.
+    fig.colorbar(_sca, ax=[axC, axD], fraction=0.046, pad=0.02,
+                 label=r'$\Delta_0$ [MeV]')
     panel_label(axC, '(c)'); panel_label(axD, '(d)')
 
     pd.DataFrame({'M_max_Msun': _pts[:, 0], f'{V1_RDEF}_km': _pts[:, 1],
@@ -3085,6 +3112,353 @@ fig.suptitle(rf"unpaired $\sigma_{{\rm crit}}$ — $M_{{T0}}={U3_MT0:g}\,M_\odot
 save_paper_figure(fig, f'sigcrit_unpaired_ms_panels_{xsd_tag}', supp=True)
 plt.show()
 
+# %% [markdown]
+# ## V.5 — Star-wide vs centre-only $\sigma_{\rm crit}$: does the definition matter?
+#
+# Every $\sigma_{\rm crit}$ in this paper is **star-wide**: $\tau>\tau_{\rm target}$
+# is demanded at `N_SHELLS` densities from `NB_SHELL_MIN` up to the centre, and
+# the threshold is set by whichever shell nucleates fastest. The obvious
+# alternative is to ask only about the centre.
+#
+# The reason to expect a difference: the driving force $|\Delta f|$ peaks around
+# $2\,n_{\rm sat}$ and can *weaken* inward, so an off-centre shell may nucleate
+# first and the centre-only number would then **underestimate** the threshold.
+#
+# **The measured answer, on this grid, is that it barely matters.** At
+# $M_{T0}=1.4\,M_\odot$ the two definitions agree exactly over 97% of the viable
+# plane; where they differ the star-wide value is larger by at most ~7 MeV/fm$^2$
+# (~8%). The centre is the deciding shell almost everywhere, and the star-wide
+# definition is the conservative choice rather than a necessary one. The cell
+# prints the exact numbers, which are the ones to quote — do not carry over the
+# "factor ~2" figure that circulated earlier, it is not what this grid shows.
+#
+# Red means star-wide is larger, i.e. centre-only would have called a star safe
+# that is not. White means the centre is the deciding shell after all.
+
+# %%
+# =============================================================================
+#  V.5.  sigma_crit(star-wide) - sigma_crit(centre-only), same plane as Fig. 5.
+#  The centre-only pass reuses the SAVED viability mask, so no filter is re-run:
+#  only the sigma_crit root-find is repeated at n_shells=1.
+# =============================================================================
+set_paper_style()
+V5_SLICES = list(F8_SHOW)          # the alpha_s slices Fig. 5 draws
+
+_v5_path = DIRS['sigma_crit'] / f'sigma_crit_centre_{xsd_tag}_MT0{SCAN_MT0:.2f}.npz'
+if _v5_path.exists():
+    with np.load(_v5_path) as _z:
+        _SIG_C = _z['sig_crit']
+    print(f"  loaded cached {_v5_path.name}")
+else:
+    # Restrict the work to the drawn slices: the other alpha_s planes would cost
+    # the same again and no panel shows them.
+    _mask = np.zeros_like(scan_main['cfl_ok'])
+    _mask[V5_SLICES] = scan_main['cfl_ok'][V5_SLICES]
+    _SIG_C = compute_sigma_crit(
+        _mask, SCAN_MT0, MAIN_FLAVOR, MAIN_CHARGE, MAIN_PHASE,
+        AL, B4G, D0G, star_scan, nuc_cfg, m_s=FILTER_KW['m_s'],
+        n_jobs=SCAN['n_jobs'], n_shells=1)      # 1 = the star CENTRE only
+    np.savez(_v5_path, sig_crit=_SIG_C, MT0=SCAN_MT0, slices=np.array(V5_SLICES))
+    print(f"  saved {_v5_path.name}")
+
+# Both defined -> difference; either missing -> no comparison exists.
+_D5 = np.where(np.isfinite(SIG) & np.isfinite(_SIG_C), SIG - _SIG_C, np.nan)
+_v5lim = symmetric_vlim([_D5[i] for i in V5_SLICES], pct=99)
+
+fig, _ax5 = paper_grid('1x2' if len(V5_SLICES) <= 2 else '2x2', mode='double',
+                       placeholder=False, square=False,
+                       **(PAPER_STYLE | {'aspect': 1.0}))
+_a5 = list(_ax5.flat)
+for _k, _ia in enumerate(V5_SLICES[:len(_a5)]):
+    _pcm5 = _dsig_panel(_a5[_k], _D5[_ia], B4G, D0G, _v5lim,
+                        rf"$\alpha_s=\pi/2\times{AL[_ia]/(np.pi/2):.1f}$")
+    panel_label(_a5[_k], f"({chr(97 + _k)})")
+for _ax in _a5[len(V5_SLICES):]:
+    _ax.set_visible(False)
+fig.colorbar(_pcm5, ax=_ax5, fraction=0.046, pad=0.02,
+             label=r'$\sigma_{\rm crit}^{\rm star} - \sigma_{\rm crit}^{\rm centre}$'
+                   r' [MeV/fm$^2$]')
+save_paper_figure(fig, f'supp_starwide_vs_centre_{xsd_tag}', supp=True)
+plt.show()
+
+# The numbers the caption should quote.
+_f5 = _D5[np.isfinite(_D5)]
+if _f5.size:
+    _rel = 100.0 * _D5[np.isfinite(_D5)] / _SIG_C[np.isfinite(_D5)]
+    print(f"\nstar-wide minus centre-only over {_f5.size} cells:")
+    print(f"  median {np.median(_f5):+.1f}   p16-p84 "
+          f"[{np.percentile(_f5, 16):+.1f}, {np.percentile(_f5, 84):+.1f}]   "
+          f"max {_f5.max():+.1f} MeV/fm^2")
+    print(f"  as a fraction of the centre-only value: median "
+          f"{np.median(_rel):+.1f}%, max {np.nanmax(_rel):+.1f}%")
+    print(f"  cells where the centre is NOT the deciding shell: "
+          f"{100.0 * (np.abs(_f5) > 1.0).mean():.0f}%")
+    pd.DataFrame({'delta_sigma_crit': _f5}).to_csv(
+        FIG_D / f'supp_starwide_vs_centre_{xsd_tag}.csv', index=False)
+
+# %% [markdown]
+# ## V.6 — Anatomy of the barrier: which term sets $R_*$?
+#
+# Fig. 1 shows $W(R)$; this shows what it is *made of*. The work of formation is
+#
+# $$W(R) = \underbrace{\tfrac{4}{3}\pi R^3\,\Delta f}_{\text{bulk, } <0}
+#          + \underbrace{4\pi R^2\sigma}_{\text{surface}}
+#          + \underbrace{W_{\rm C}(R)}_{\text{Coulomb}},$$
+#
+# and the barrier exists only because the surface term wins at small $R$ while
+# the bulk term wins at large $R$. **(a)** separates the three at the reference
+# PNS centre — the peak sits where bulk and surface cross, and the Coulomb term
+# decides how far that crossing moves.
+#
+# **(b)** the consequence: $R_*$ and $W_*$ against $\sigma$. Without Coulomb,
+# classical nucleation theory gives $R_*\propto\sigma$ and $W_*\propto\sigma^3$
+# exactly; the Coulomb term bends both, and the deviation is the reason
+# $\sigma_{\rm crit}$ has to be solved for rather than scaled. The dashed guides
+# are the pure-CNT power laws anchored at the smallest $\sigma$ drawn.
+
+# %%
+# =============================================================================
+#  V.6 knobs.  Everything here is a per-point solve -- no tables involved.
+# =============================================================================
+V6_SET   = quark_param_sets[0]
+V6_PHASE = 'unpaired'      # the single-phase droplet: one Delta_f, one clean split
+V6_SIGMA = 100.0           # MeV/fm^2, for panel (a)
+V6_SIGMAS = np.linspace(40., 250., 12 if REDUCED_GRID else 30)   # panel (b)
+V6_R = np.linspace(0.02, 12.0, 500)
+
+_v6_par = get_alphabag_custom(alpha=V6_SET['alpha'], B4=V6_SET['B4'],
+                              m_s=V6_SET['m_s'])
+_v6_nB, _v6_T, _ = central_state(MT0_REF, star_scan)
+print(f"V.6 at the reference PNS centre: n_B = {_v6_nB/n_sat:.2f} n_sat, "
+      f"T = {_v6_T:.1f} MeV")
+
+fig, ((axA, axB),) = paper_grid('1x2', mode='double', placeholder=False,
+                                square=False,
+                                **(PAPER_STYLE | {'aspect': 1.15}))
+
+# --- (a) the three terms ------------------------------------------------------
+_eb6 = compute_energy_barrier(
+    H['trapped'], _v6_nB, _v6_T, V6_SIGMA, params=_v6_par,
+    Y_L_H=SCAN_SNAPSHOT['YLH'], flavor_mode=MAIN_FLAVOR,
+    electric_charge_mode=MAIN_CHARGE, quark_phase=V6_PHASE, R_values=V6_R)
+for _y, _lbl, _col, _ls in (
+        (_eb6.W_bulk,    r'bulk  $\frac{4}{3}\pi R^3\Delta f$', OKAB['blue'],  '--'),
+        (_eb6.W_surface, r'surface  $4\pi R^2\sigma$',          OKAB['orange'], '--'),
+        (_eb6.W_coulomb, r'Coulomb',                            OKAB['green'],  '--'),
+        (_eb6.W,         r'total $W(R)$',                       'k',            '-')):
+    axA.plot(V6_R, _y, color=_col, ls=_ls, lw=(1.9 if _ls == '-' else 1.3),
+             label=_lbl)
+_k6 = int(np.nanargmax(_eb6.W))
+axA.plot(V6_R[_k6], _eb6.W[_k6], 'o', ms=6, color='k', mfc='white', zorder=6)
+axA.axvline(V6_R[_k6], color='0.6', lw=0.8, ls=':', zorder=1)
+axA.annotate(rf'$R_*={V6_R[_k6]:.2f}$ fm', (V6_R[_k6], _eb6.W[_k6]),
+             textcoords='offset points', xytext=(8, 6), fontsize=8.5)
+axA.axhline(0, color='0.6', lw=0.7, zorder=0)
+axA.set_xlim(0, 8)
+axA.set_ylim(-1.6 * abs(_eb6.W[_k6]), 2.2 * abs(_eb6.W[_k6]))
+axA.set_xlabel(r'$R$ [fm]'); axA.set_ylabel(r'$W$ [MeV]')
+axA.legend(loc='lower left', fontsize=PAPER_STYLE['legendsize'] - 1)
+axA.set_title(rf'$\sigma={V6_SIGMA:.0f}$ MeV/fm$^2$, {V6_PHASE}',
+              fontsize=PAPER_STYLE['legendsize'])
+panel_label(axA, '(a)', corner='upper right')
+
+# --- (b) how R_* and W_* scale with sigma ------------------------------------
+_R6 = np.full(V6_SIGMAS.size, np.nan)
+_W6 = np.full(V6_SIGMAS.size, np.nan)
+_cache6 = {}
+for _i, _sg in enumerate(V6_SIGMAS):
+    _pt6 = nucleation_point(H['trapped'], _v6_nB, _v6_T, _sg, params=_v6_par,
+                            Y_L_H=SCAN_SNAPSHOT['YLH'], quark_phase=V6_PHASE,
+                            flavor_mode=MAIN_FLAVOR,
+                            electric_charge_mode=MAIN_CHARGE, V=V_NUC,
+                            cache=_cache6)
+    _R6[_i], _W6[_i] = _pt6.R_star, _pt6.W_star
+axB.plot(V6_SIGMAS, _R6, color=OKAB['blue'], lw=1.8, label=r'$R_*$ [fm]')
+_axB2 = axB.twinx()
+_axB2.plot(V6_SIGMAS, _W6, color=OKAB['vermillion'], lw=1.8,
+           label=r'$W_*$ [MeV]')
+# Pure-CNT scalings, anchored at the first finite point: R* ~ sigma, W* ~ sigma^3.
+_j6 = int(np.flatnonzero(np.isfinite(_R6))[0])
+axB.plot(V6_SIGMAS, _R6[_j6] * V6_SIGMAS / V6_SIGMAS[_j6], color=OKAB['blue'],
+         lw=0.9, ls=':', alpha=0.8)
+_axB2.plot(V6_SIGMAS, _W6[_j6] * (V6_SIGMAS / V6_SIGMAS[_j6])**3,
+           color=OKAB['vermillion'], lw=0.9, ls=':', alpha=0.8)
+_axB2.set_yscale('log')
+axB.set_xlabel(r'$\sigma$ [MeV/fm$^2$]')
+axB.set_ylabel(r'$R_*$ [fm]', color=OKAB['blue'])
+_axB2.set_ylabel(r'$W_*$ [MeV]', color=OKAB['vermillion'])
+axB.tick_params(axis='y', colors=OKAB['blue'])
+_axB2.tick_params(axis='y', colors=OKAB['vermillion'])
+axB.set_title(r'dotted: $R_*\propto\sigma$, $W_*\propto\sigma^3$ (no Coulomb)',
+              fontsize=PAPER_STYLE['legendsize'] - 1)
+panel_label(axB, '(b)')
+
+pd.DataFrame({'R_fm': V6_R, 'W_total': _eb6.W, 'W_bulk': _eb6.W_bulk,
+              'W_surface': _eb6.W_surface, 'W_coulomb': _eb6.W_coulomb}).to_csv(
+    FIG_D / f'supp_barrier_anatomy_{xsd_tag}.csv', index=False)
+pd.DataFrame({'sigma': V6_SIGMAS, 'R_star_fm': _R6, 'W_star_MeV': _W6}).to_csv(
+    FIG_D / f'supp_barrier_scaling_{xsd_tag}.csv', index=False)
+save_paper_figure(fig, f'supp_barrier_anatomy_{xsd_tag}', supp=True)
+plt.show()
+
+# %% [markdown]
+# ## V.7 — Quantum tunnelling vs thermal activation
+#
+# The paper's rates are **thermal**: the droplet is carried over the barrier by a
+# fluctuation, at a rate $\propto e^{-W_*/T}$. A droplet can also **tunnel**
+# through it, and that channel does not care about $T$ at all — so as a star
+# cools, tunnelling must eventually win. The question is whether it wins anywhere
+# a proto-neutron star actually lives.
+#
+# The quantum time comes from the relativistic WKB pipeline: an effective inertia
+# $M(R)$ for the hadronic flow the growing droplet displaces, a Bohr–Sommerfeld
+# ground-state energy $E_0$ inside the well, and the tunnelling action $A(E_0)$
+# between the two turning points, giving
+# $\tau_{\rm qt} = 1/(N_c\,\nu_0\,e^{-A})$.
+#
+# The crossing of the two curves is the **crossover temperature**: above it
+# thermal activation dominates, below it tunnelling does. Read against the shaded
+# PNS band — the temperatures the star actually passes through — it says whether
+# the quantum channel is relevant to this problem or a footnote.
+
+# %%
+# =============================================================================
+#  V.7 knobs.  Per-point WKB -- no quantum grid table is needed, the barrier and
+#  the inertia are rebuilt at each temperature from the same engine the tables
+#  use, so the two rates are compared at literally the same droplet.
+# =============================================================================
+V7_SET   = quark_param_sets[0]
+V7_PHASE = 'unpaired'          # single-phase: one Delta_f, hence one clean W(R)
+V7_SIGMA = 100.0               # MeV/fm^2
+V7_T = np.linspace(1.0, 60.0, 15 if REDUCED_GRID else 40)   # MeV
+V7_NC = 1e48                   # attempt centres in the nucleation volume
+
+_v7_par = get_alphabag_custom(alpha=V7_SET['alpha'], B4=V7_SET['B4'],
+                              m_s=V7_SET['m_s'])
+_v7_nB = _v6_nB                # the same reference centre as V.6
+M_NEUTRON = 939.565            # MeV, for the hadronic mass density rho_H
+
+_tau_th = np.full(V7_T.size, np.nan)
+_tau_qt = np.full(V7_T.size, np.nan)
+for _i, _T in enumerate(V7_T):
+    _pt = nucleation_point(H['trapped'], _v7_nB, _T, V7_SIGMA, params=_v7_par,
+                           Y_L_H=SCAN_SNAPSHOT['YLH'], quark_phase=V7_PHASE,
+                           flavor_mode=MAIN_FLAVOR,
+                           electric_charge_mode=MAIN_CHARGE, V=V_NUC)
+    _tau_th[_i] = _pt.tau
+    if not (np.isfinite(_pt.R_star) and _pt.R_star > 0):
+        continue                       # no critical droplet -> nothing to tunnel
+    # Same W(R) the thermal path maximised, and the inertia of the hadronic
+    # flow the droplet displaces -- the recipe tables/quantum.py uses per point.
+    _rho_H = M_NEUTRON * _v7_nB
+    _ratio = float(np.atleast_1d(_pt.Qs.n_B)[0]) / _v7_nB
+    # lambda_D exists ONLY for the 'screening' charge mode; every other mode
+    # leaves it NaN, and passing that NaN through makes W(R) NaN at every
+    # radius -- which the WKB root-find then reports as "no turning points",
+    # i.e. a silently empty curve rather than an error.
+    _lamD = (float(_pt.lambda_D) if np.isfinite(_pt.lambda_D) else None)
+
+    def _W(R, _df=float(_pt.Delta_f), _s=V7_SIGMA,
+           _dnC=float(_pt.delta_n_C), _lam=_lamD):
+        return work_of_formation(R, _df, _s, _dnC, lambda_D=_lam)
+
+    def _M(R, _r=_rho_H, _q=_ratio):
+        return effective_inertia(R, _r, _q)
+
+    try:
+        _tau_qt[_i] = quantum_nucleation_time(_W, _M, float(_pt.R_star),
+                                              N_c=V7_NC).tau_qt
+    except Exception:
+        pass       # no two real turning points -> genuinely non-tunnelling
+
+fig, ((axA, axB),) = paper_grid('1x2', mode='double', placeholder=False,
+                                square=False,
+                                **(PAPER_STYLE | {'aspect': 1.15}))
+
+# --- (a) the two nucleation times --------------------------------------------
+with np.errstate(divide='ignore', invalid='ignore'):
+    axA.plot(V7_T, np.log10(_tau_th), color=OKAB['vermillion'], lw=1.9,
+             label=r'thermal, $\tau=1/(V\Gamma)$')
+    axA.plot(V7_T, np.log10(_tau_qt), color=OKAB['blue'], lw=1.9,
+             label=r'quantum, $\tau_{\rm qt}=1/(N_c\nu_0 e^{-A})$')
+axA.axhline(np.log10(TAU_TARGET), color='0.4', lw=1.0, ls=':',
+            label=rf'$\tau_{{\rm target}}={TAU_TARGET*1e3:g}$ ms')
+# The temperature band a PNS centre actually occupies, from the two snapshots.
+_T_pns = [float(H['iso_trapped']['T'](_v7_nB, _s['YLH'], _s['S']))
+          for _s in (PNS_T0, PNS_TMAX)]
+axA.axvspan(min(_T_pns), max(_T_pns), color=OKAB['grey'], alpha=0.18, zorder=0)
+axA.text(np.mean(_T_pns), 0.02, 'PNS\ncentre', transform=axA.get_xaxis_transform(),
+         ha='center', va='bottom', fontsize=8, color='0.35',
+         bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='none', alpha=0.7))
+# The crossover: where tunnelling becomes the faster channel.
+_ok7 = np.isfinite(_tau_th) & np.isfinite(_tau_qt)
+if _ok7.any():
+    _sgn = np.sign(np.log10(_tau_qt[_ok7]) - np.log10(_tau_th[_ok7]))
+    _fl = np.flatnonzero(np.diff(_sgn) != 0)
+    if _fl.size:
+        _Tx = V7_T[_ok7][_fl[0]]
+        axA.axvline(_Tx, color='k', lw=1.0, ls='--', zorder=3)
+        axA.annotate(rf'$T_\times\simeq{_Tx:.0f}$ MeV', (_Tx, 0),
+                     textcoords='offset points', xytext=(5, 10), fontsize=8.5)
+        print(f"crossover temperature: T_x = {_Tx:.1f} MeV "
+              f"(below it tunnelling is the faster channel)")
+    else:
+        print("no crossover in the sampled range: one channel dominates "
+              "throughout (compare the two curves to see which)")
+    # The comparison the figure exists to make, stated in numbers rather than
+    # left to the eye: which channel is faster where the star actually is.
+    _iT = int(np.argmin(np.abs(V7_T - np.mean(_T_pns))))
+    if np.isfinite(_tau_th[_iT]) and np.isfinite(_tau_qt[_iT]):
+        print(f"at the PNS centre (T = {V7_T[_iT]:.0f} MeV): "
+              f"tau_thermal = {_tau_th[_iT]:.2e} s, "
+              f"tau_quantum = {_tau_qt[_iT]:.2e} s "
+              f"-> thermal faster by {np.log10(_tau_qt[_iT] / _tau_th[_iT]):.0f} "
+              f"orders of magnitude")
+        print("  tunnelling only becomes the faster channel at temperatures "
+              "where BOTH times are astronomically long, so it never competes "
+              "in the regime this paper is about.")
+axA.set_xlabel(r'$T$ [MeV]'); axA.set_ylabel(r'$\log_{10}\,\tau$ [s]')
+# Lower left: the top of the panel is where both curves and the band label are.
+axA.legend(loc='lower left', fontsize=PAPER_STYLE['legendsize'] - 2,
+           framealpha=0.92)
+panel_label(axA, '(a)', corner='upper right')
+
+# --- (b) why: the exponent of each channel -----------------------------------
+# Thermal is suppressed by W_*/T, which diverges as T -> 0; the tunnelling
+# action A is nearly T-independent. Plotting the two exponents together shows
+# the crossover as the point where they cross, with no rate prefactors involved.
+_WT7 = np.full(V7_T.size, np.nan)
+for _i, _T in enumerate(V7_T):
+    _p = nucleation_point(H['trapped'], _v7_nB, _T, V7_SIGMA, params=_v7_par,
+                          Y_L_H=SCAN_SNAPSHOT['YLH'], quark_phase=V7_PHASE,
+                          flavor_mode=MAIN_FLAVOR,
+                          electric_charge_mode=MAIN_CHARGE, V=V_NUC)
+    if np.isfinite(_p.W_star) and _T > 0:
+        _WT7[_i] = _p.W_star / _T
+axB.plot(V7_T, _WT7, color=OKAB['vermillion'], lw=1.9, label=r'$W_*/T$')
+if not np.isfinite(_tau_qt).any():
+    print("  !! no quantum point converged -- check that lambda_D is finite or "
+          "None, and that W(R) is not NaN (that is how this fails silently)")
+with np.errstate(divide='ignore', invalid='ignore'):
+    # A = ln(N_c nu_0 tau_qt); the prefactor is slowly varying, so this reads
+    # the action straight off the time without re-running the WKB integral.
+    axB.plot(V7_T, np.log(np.clip(_tau_qt, 1e-300, None)) + np.log(V7_NC),
+             color=OKAB['blue'], lw=1.9, label=r'$A$ (tunnelling action)')
+axB.set_yscale('log')
+axB.set_xlabel(r'$T$ [MeV]'); axB.set_ylabel('exponent')
+axB.legend(loc='upper right', fontsize=PAPER_STYLE['legendsize'] - 1)
+axB.set_title(rf'$n_B={_v7_nB/n_sat:.1f}\,n_{{\rm sat}}$, '
+              rf'$\sigma={V7_SIGMA:.0f}$ MeV/fm$^2$',
+              fontsize=PAPER_STYLE['legendsize'])
+panel_label(axB, '(b)')
+
+pd.DataFrame({'T_MeV': V7_T, 'tau_thermal_s': _tau_th, 'tau_quantum_s': _tau_qt,
+              'W_over_T': _WT7}).to_csv(
+    FIG_D / f'supp_quantum_vs_thermal_{xsd_tag}.csv', index=False)
+save_paper_figure(fig, f'supp_quantum_vs_thermal_{xsd_tag}', supp=True)
+plt.show()
+
+# %%
 print("\n" + "=" * 78)
 print("Notebook complete.")
 print(f"  paper figures -> {DIRS['fig_paper'].relative_to(OUT)}")

@@ -58,7 +58,8 @@ def replay_cfl(alpha, B4, Delta0, cfg: FilterConfig, e_c_vec=None):
 
 
 def replay_accepted(sig_crit, alpha_slices, B4_grid, Delta0_grid,
-                    cfg: FilterConfig, max_curves=None, n_jobs=-1, verbose=True):
+                    cfg: FilterConfig, max_curves=None, n_jobs=-1, verbose=True,
+                    with_params=False):
     """Replay the cold CFL EoS + TOV of every ACCEPTED cell of a sigma_crit grid.
 
     Accepted = finite sigma_crit (CFL-pass AND nucleating). Each replay is an
@@ -67,10 +68,17 @@ def replay_accepted(sig_crit, alpha_slices, B4_grid, Delta0_grid,
     hundred curves are visually identical to several thousand at a fraction of
     the cost (None = replay all).
 
+    ``with_params=True`` also returns the (alpha_s, B^1/4, Delta_0) each curve
+    came from. Without it the caller has a bundle of curves and no way to ask
+    WHICH parameter drives their spread -- and reconstructing the mapping
+    outside would mean duplicating the accept ordering and the subsample stride,
+    which is exactly the kind of silent drift a plot never reveals.
+
     Returns
     -------
-    list of (curve_dict, sigma_crit) with curve_dict from ``replay_cfl``
-    (keys mu, P, R, M); failed replays are dropped.
+    list of (curve_dict, sigma_crit), or of (curve_dict, sigma_crit,
+    (alpha, B4, Delta0)) when ``with_params``. curve_dict comes from
+    ``replay_cfl`` (keys mu, P, R, M); failed replays are dropped.
     """
     alpha_slices = np.atleast_1d(alpha_slices)
     accept = [(alpha_slices[ia], B4_grid[jx], Delta0_grid[i],
@@ -93,7 +101,12 @@ def replay_accepted(sig_crit, alpha_slices, B4_grid, Delta0_grid,
             delayed(replay_cfl)(a, b, d, cfg) for a, b, d, _ in accept)
     else:
         out = [replay_cfl(a, b, d, cfg) for a, b, d, _ in accept]
-    curves = [(c, sc) for c, (_, _, _, sc) in zip(out, accept) if c is not None]
+    if with_params:
+        curves = [(c, sc, (a, b, d)) for c, (a, b, d, sc) in zip(out, accept)
+                  if c is not None]
+    else:
+        curves = [(c, sc) for c, (_, _, _, sc) in zip(out, accept)
+                  if c is not None]
     if verbose:
         print(f"replay: reconstructed {len(curves)}/{len(accept)} curves.", flush=True)
     return curves
