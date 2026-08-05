@@ -155,7 +155,7 @@ print(f"joblib parallelism available: {nuc_an._HAVE_JOBLIB}")
 #    False -> the production grids behind the published figures. Part II takes
 #             hours. Writes to output/paper/.
 # =============================================================================
-REDUCED_GRID = True
+REDUCED_GRID = False
 
 OUT = Path('../output') / ('smoke' if REDUCED_GRID else 'paper')
 DIRS = {
