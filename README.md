@@ -24,7 +24,7 @@ preferred $\sigma$ against the maps.
 
 ## Install
 
-Requires Python ≥ 3.9 and the sibling [`eos`](https://github.com/guerrinimirco/eos)
+Requires Python ≥ 3.11 and the sibling [`eos`](https://github.com/guerrinimirco/eos)
 package, which supplies the equations of state, the TOV solver and the shared
 publication figure style.
 

@@ -2,12 +2,19 @@
 name = "nucleation"
 version = "0.1.0"
 description = "Nucleation codes for quark-hadron phase transitions"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
+
+# Matches the floor `eos` declares, and for the same measured reasons: scipy
+# 1.13's `root(..., method="hybr")` reports success while returning its seed
+# unchanged on one of eos's closures, and Python 3.9 reached end of life in
+# October 2025. Python 3.11 is the floor numpy 2.3 and scipy 1.17 impose.
 dependencies = [
-    "numpy",
-    "scipy",
+    "numpy>=2.0",
+    "scipy>=1.17",
     "eos",
 ]
+
+# Developed and tested on CPython 3.14.2 with numpy 2.3.5 and scipy 1.17.0.
 
 [build-system]
 requires = ["setuptools>=61.0"]
