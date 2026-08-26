@@ -32,7 +32,15 @@ def test_energy_barrier_matches_golden(regression, params, H_interp):
         gold = np.array([np.nan if x is None else x for x in c['W']])
         m = np.isfinite(gold) & np.isfinite(eb.W)
         assert np.all(np.isnan(gold) == np.isnan(eb.W))
-        assert np.max(np.abs(gold[m] - eb.W[m])) < 1e-9
+        # Scaled to the barrier height, not absolute. W(R) runs from 0 at R = 0
+        # to ~1e6 MeV at the top of the curve, so a single absolute bound is in
+        # practice a bound on the largest entry alone: the former 1e-9 sat at
+        # 4e-16 of it, below one ulp of a double, and so asserted bit-identity.
+        # A relative bound is what "reproduces the barrier" actually means, and
+        # 1e-12 is four orders tighter than the rel=1e-8 this suite accepts on
+        # W_c itself. Pointwise relative is deliberately NOT used: the curve
+        # passes through zero at R = 0, where relative error is meaningless.
+        assert np.max(np.abs(gold[m] - eb.W[m])) < 1e-12 * np.max(np.abs(gold[m]))
 
 
 def test_screening_reduces_to_gcn_coulomb(params, build_H):

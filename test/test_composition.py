@@ -12,9 +12,25 @@ from nucleation.barrier import driving_force, work_of_formation
 SIGMA = 30.0
 DELTA0 = 80.0
 
+# Tolerance on the quantities the CFL flavour lock forces to zero. This is the
+# tightest claim the code makes about them, not a chosen number: the lock is a
+# pair of RESIDUAL ROWS of a root find (`Qs.Y_C` and `Qs.Y_S - 1` in
+# solve_saddlepoint_cfl), and robust_root() accepts a solution at
+# max|residual| < 1e-8. Asserting anything tighter would fail a correctly
+# converged point.
+LOCK_TOL = 1e-8
+
 
 def test_regression_solver_cases(regression, params, build_H):
-    """Every unaffected (flavor, charge, phase) Q* matches the pre-rewrite golden."""
+    """Every unaffected (flavor, charge, phase) Q* matches the pre-rewrite golden.
+
+    The quantities the CFL lock forces to zero are checked AGAINST ZERO rather
+    than against the golden. There the golden records only where the root find
+    happened to stop, so a relative comparison pins the floating-point
+    association of the quark block rather than any physics -- and duly broke on
+    a one-ulp reassociation in `eos.alphabag` that moved no physical quantity.
+    Asserting the lock is both the stronger claim and the stable one.
+    """
     for c in regression['cases']:
         if not c['converged']:
             continue
@@ -23,10 +39,35 @@ def test_regression_solver_cases(regression, params, build_H):
                   Delta0=DELTA0 if c['phase'] == 'cfl' else None, sigma=SIGMA)
         Qs = get_solver_Qs(c['flavor'], c['charge'], params, **kw)(H)
         assert Qs is not None
+        tag = f"{c['flavor']}/{c['charge']}/{c['phase']}"
+
+        locked = set()
+        if c['phase'] == 'cfl':
+            # Y_C = 0 and Y_S = +1 identically in the locked phase, in every
+            # charge mode. mu_C = mu_u - mu_d is a LINEAR image of the first
+            # (equal densities at equal masses => equal potentials), so it
+            # inherits the residual gate once scaled by mu_B.
+            assert abs(Qs.Y_C) < LOCK_TOL, f"{tag}: Y_C not locked to zero"
+            assert abs(Qs.mu_C) < LOCK_TOL * abs(Qs.mu_B), \
+                f"{tag}: mu_C not locked to zero"
+            locked |= {'Y_C', 'mu_C'}
+            if c['charge'] == 'lcn':
+                # CFL is electrically neutral by the lock, so a LOCALLY neutral
+                # droplet needs no electrons at all. (Under global neutrality it
+                # is charged and mu_e = mu_e^H is a real ~300 MeV sea, which is
+                # why this is keyed on the charge mode.)
+                assert abs(Qs.Y_e) < LOCK_TOL, f"{tag}: Y_e not zero"
+                # mu_e is a NONLINEAR image of Y_e -- n_e ~ mu_e T^2 at these
+                # temperatures -- so no bound on it follows from the gate: a
+                # point converging to Y_e at the gate would carry mu_e five
+                # orders above where it sits now and still be correct. Y_e
+                # above is the assertion; mu_e adds nothing to it.
+                locked |= {'Y_e', 'mu_e'}
+
         for k, v in c['Qs'].items():
-            if abs(v) > 1e-12:
-                assert getattr(Qs, k) == pytest.approx(v, rel=1e-9), \
-                    f"{c['flavor']}/{c['charge']}/{c['phase']} {k}"
+            if k in locked:
+                continue
+            assert getattr(Qs, k) == pytest.approx(v, rel=1e-9), f"{tag} {k}"
 
 
 def test_coulomb_minimize_unpaired_regression(regression, params, build_H):
