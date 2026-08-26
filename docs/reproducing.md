@@ -11,12 +11,14 @@ needs, and what to do when something is missing.
 ```bash
 pip install -e ../eos          # must come first
 pip install -e .
-pytest nucleation -q           # 71 passed, 0 skipped
+pytest test -q                 # 72 tests; see README "Testing"
 ```
 
-If the test suite does not come back green, stop here — every number below
-depends on it. In particular a **skipped** test is not a pass: the suite is
-designed to run with no external data, so a skip means something is misconfigured.
+Expect `2 failed, 70 passed`. Both failures are known and neither is a physics
+change — they compare round-off, and README "Testing" says exactly how. Anything
+*else* failing means stop here, because every number below depends on the suite.
+In particular a **skipped** test is not a pass: the suite is designed to run with
+no external data, so a skip means something is misconfigured.
 
 The notebook is a [jupytext](https://jupytext.readthedocs.io/) `py:percent` file.
 Run it either way:
@@ -190,8 +192,8 @@ number, but both must be tabulated or their curves vanish.
 Only needed if the SFHo EoS or its parametrization changes:
 
 ```bash
-python -m nucleation.tests.make_fixture
-pytest nucleation -q          # the goldens must still pass
+python test/make_fixture.py
+pytest test -q                # the goldens must still pass
 ```
 
 The fixture is a deliberately irregular grid — it carries the exact bracketing

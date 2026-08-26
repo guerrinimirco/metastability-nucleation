@@ -28,7 +28,9 @@ def thermal_obs(params, H_table):
 
 def test_density_scans_produce_curve(thermal_obs):
     obs = thermal_obs
-    r_T = compute_nucleation_density(obs, tau_target=1e-3, scan='T')
+    # The T scan is exercised for its own sake -- it must not raise; the
+    # assertions below are on the n_B scan, which is what plots.
+    compute_nucleation_density(obs, tau_target=1e-3, scan='T')
     r_n = compute_nucleation_density(obs, tau_target=1e-3, scan='n_B')
     assert np.isfinite(r_n.T_nuc).sum() > 0
     # nucleation_curve slices the n_B scan into plottable arrays

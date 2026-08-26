@@ -49,7 +49,7 @@ and modify, and the notebook imports both packages directly.
 Check the install:
 
 ```bash
-pytest nucleation -q          # 71 tests, no external data needed
+pytest test -q                # 72 tests, no external data needed
 ```
 
 ---
@@ -67,6 +67,9 @@ nucleation/                CORE. Knows nothing about stars, about grids of
   rates.py                 Langer thermal activation + relativistic-WKB tunnelling
   conditions.py            WHERE nucleation happens -- the tau = tau_target
                            locus, plus the single-point API
+  quark.py                 the eos.alphabag interface: custom parameter sets
+                           and the TOTAL droplet thermodynamics (quarks + bag
+                           + electrons + photons + gluons + thermal neutrinos)
   tables/                  the same physics over a grid, plus .dat I/O
     grid.py qstar.py thermal.py quantum.py
 
@@ -84,6 +87,7 @@ nucleation/analysis/       PAPER LAYER. This study's specific choices.
 
 notebooks/                 the paper notebook (the .py jupytext mirror is the
                            source of truth -- reviewable diffs)
+test/                      the suite, with its committed fixture and goldens
 docs/                      physics notes and the reproduction guide
 output/                    generated; see below
 ```
@@ -95,65 +99,125 @@ never imports `analysis`, and **`eos` never imports `nucleation`**.
 
 ## Quick start
 
-### The nucleation time at one point
+All three examples are copy-paste runnable **from a fresh clone**, from the
+repository root, with no table generation: they read the committed test fixture
+`test/data/eos_hadronic_trapped_fixture.dat` (247 KB, an 18 x 4 x 13 trapped-SFHo
+grid). The output below each is what they actually printed, on the stack the
+suite is run with: CPython 3.14.2 with NumPy 2.3.5 and SciPy 1.17.0. Together
+they take about ten seconds.
+
+For real work, swap the fixture for a production table out of Part II of the
+notebook — the fixture is deliberately coarse and exists to make the goldens
+reproducible without shipping 37 MB.
+
+### 1. The nucleation time at one point
 
 ```python
-from eos.sfho.compute_tables import load_eos_table, build_interpolators
-from eos.alphabag.parameters import get_alphabag_custom
+from eos.sfho.table import load_eos_table, build_interpolators
+from nucleation.quark import custom_params
 from nucleation import nucleation_point
 
-H = build_interpolators(load_eos_table('...trapped....dat', 'trapped_neutrinos'))
-params = get_alphabag_custom(alpha=0.157, B4=145.0, m_s=100.0)
+H = build_interpolators(load_eos_table(
+    'test/data/eos_hadronic_trapped_fixture.dat', 'trapped_neutrinos'))
+params = custom_params(alpha=0.157, B4=145.0, m_s=100.0)
 
 pt = nucleation_point(H, n_B_H=0.9, T=25.0, sigma=30.0,
-                      params=params, Y_L_H=0.25,
-                      quark_phase='unpCFL', Delta0=80.0,
-                      electric_charge_mode='coulomb_minimize')
+                      params=params, Y_L_H=0.25)
 
-pt.R_star        # critical radius [fm]
-pt.W_star        # barrier [MeV]
-pt.W_over_T      # the exponent that decides the rate
-pt.N_B_star      # baryons inside the critical droplet
-pt.tau           # nucleation time [s]
-pt.nucleates(tau_target=1e-3)
+print(f"R_star  = {pt.R_star:8.4f} fm")
+print(f"W_star  = {pt.W_star:8.4f} MeV")
+print(f"W_over_T= {pt.W_over_T:8.4f}")
+print(f"N_B_star= {pt.N_B_star:8.4f}")
+print(f"tau     = {pt.tau:.6e} s")
+print(f"nucleates(tau_target=1e-3) = {pt.nucleates(tau_target=1e-3)}")
 ```
 
-### The nucleation condition: where does it happen?
+```
+R_star  =   0.9885 fm
+W_star  = 122.7818 MeV
+W_over_T=   4.9113
+N_B_star=   4.2014
+tau     = 5.430414e-73 s
+nucleates(tau_target=1e-3) = True
+```
+
+`R_star` is the critical radius, `W_star` the barrier, `W_over_T` the exponent
+that decides the rate and `N_B_star` the baryons inside the critical droplet.
+At sigma = 30 MeV/fm^2 the barrier is low enough that nucleation is effectively
+instantaneous — which is the point of asking for sigma_crit instead (example 3).
+
+Pass `quark_phase='unpCFL'` with `Delta0=` for a paired droplet, and
+`electric_charge_mode='coulomb_minimize'` for the self-consistent Coulomb
+treatment; the defaults are the unpaired phase under global charge neutrality.
+
+### 2. The nucleation condition: where does it happen?
 
 ```python
-from nucleation import NucleationCondition, T_nuc
+import numpy as np
+from eos.sfho.table import load_eos_table
+from nucleation import NucleationCondition
+from nucleation.tables import compute_thermal_nucleation_observables
 
-# From a computed grid (thermal OR quantum -- both expose .tau)
+H_table = load_eos_table(
+    'test/data/eos_hadronic_trapped_fixture.dat', 'trapped_neutrinos')
+obs = compute_thermal_nucleation_observables(
+    H_table, sigma=80.0, params=params, flavor_mode='saddlepoint',
+    electric_charge_mode='gcn', quark_phase='unpaired')
+
 cond = NucleationCondition.from_table(obs, tau_target=1e-3)
-cond.T_of_nB(0.9, Y_L=0.25)        # the nucleation temperature [MeV]
-cond.nB_of_T(30.0, Y_L=0.25)       # the inverse [fm^-3]
-n_B, T = cond.curve(Y_L=0.25)      # the whole locus, ready to plot
+print(cond)
 
-# Or with no table at all -- solves on the fly. This is the one for exploring
-# parameter space: "at what T does THIS (alpha_s, B^1/4, Delta_0) nucleate?"
-cond = NucleationCondition.from_point_solver(
-    H, T_grid=np.linspace(5, 80, 30), n_B_grid=np.linspace(0.6, 1.2, 20),
-    sigma=80.0, params=params, tau_target=1e-3, Y_L_H=0.25)
+n_B, T = cond.curve(Y_L=0.25)
+print(f"locus at Y_Le = 0.25: {n_B.size} points")
+for x, y in list(zip(n_B, T))[:4]:
+    print(f"  n_B = {x:.4f} fm^-3   T_nuc = {y:8.4f} MeV")
+print(f"T_of_nB(0.9, Y_L=0.25) = {float(cond.T_of_nB(0.9, Y_L=0.25)):.4f} MeV")
 ```
 
-### The critical surface tension
+```
+NucleationCondition(tau_target=0.001 s, eq_type='trapped_neutrinos', 72/72 points on the locus)
+locus at Y_Le = 0.25: 18 points
+  n_B = 0.1418 fm^-3   T_nuc =  34.5921 MeV
+  n_B = 0.2678 fm^-3   T_nuc =  24.7061 MeV
+  n_B = 0.2993 fm^-3   T_nuc =  22.8319 MeV
+  n_B = 0.3056 fm^-3   T_nuc =  22.4899 MeV
+T_of_nB(0.9, Y_L=0.25) = 15.6626 MeV
+```
+
+`cond.nB_of_T(T, Y_L=...)` is the inverse — one locus, not two curves, so the
+two round-trip. `NucleationCondition.from_point_solver(H, T_grid, n_B_grid, ...)`
+builds the same object with no table at all, solving on the fly; that is the one
+for exploring parameter space ("at what T does THIS
+(alpha_s, B^1/4, Delta_0) nucleate?"), at the cost of a solve per grid point.
+
+### 3. The critical surface tension
 
 ```python
-from nucleation.analysis import (NucConfig, make_star_match,
-                                 star_shell_states, sigma_target_pt)
+from nucleation.analysis import NucConfig, hadronic_point, sigma_target_pt
 
 nuc = NucConfig(tau_target=1e-3)
-shells = star_shell_states(MT0=1.4, star=star, n_shells=6)   # star-wide
-sigma_crit = sigma_target_pt(H_pt, T_c, 'saddlepoint', 'coulomb_minimize',
-                             'unpCFL', params, Delta0=80.0, nuc=nuc,
-                             shells=shells)
+H_pt = hadronic_point(H, n_B=0.9, Y_L=0.25, T=25.0)
+sigma_crit = sigma_target_pt(H_pt, 25.0, 'saddlepoint', 'coulomb_minimize',
+                             'unpCFL', params, 80.0, nuc)
+print(f"sigma_crit (centre-only) = {sigma_crit:.4f} MeV/fm^2")
 ```
+
+```
+sigma_crit (centre-only) = 98.9248 MeV/fm^2
+```
+
+The star converts if the true sigma is below this. `sigma_target_pt` returns
+`+inf` when the point nucleates for every sigma tested up to `nuc.sig_hi`, and
+`NaN` when no converged nucleating point exists at all — read the value before
+trusting it.
 
 > **Star-wide vs centre-only.** Nucleation is not always fastest at the centre:
 > near the strange-matter-stability corner the driving force peaks around
 > 2 n_sat and *weakens* inward, so an off-centre shell nucleates first. The
-> centre-only value can underestimate $\sigma_{\rm crit}$ by up to a factor ~2
-> there. Pass `shells=` explicitly and say which definition you used.
+> centre-only value above can underestimate $\sigma_{\rm crit}$ by up to a
+> factor ~2 there. Pass `shells=star_shell_states(MT0, star, n_shells)` for the
+> star-wide value — that needs a TOV sequence, so it is a notebook-scale call,
+> not a fresh-clone one — and always say which definition you used.
 
 ---
 
@@ -249,16 +313,32 @@ code below it is not decoration but the figure contract.
 ## Testing
 
 ```bash
-pytest nucleation -q
+pytest test -q
 ```
 
-71 tests, no external data: the hadronic fixture
-(`nucleation/tests/data/`, 247 KB) is committed and regenerable with
-`python -m nucleation.tests.make_fixture`.
+72 tests, no external data and nothing under `output/`: the hadronic fixture
+(`test/data/`, 247 KB) is committed and regenerable with
+`python test/make_fixture.py`. The suite runs in a few seconds.
 
-`golden/regression.json` pins the engine's output at known points. Treat it as a
-**tripwire, not a target** — if a golden fails, find out why before touching the
-tolerance.
+Regenerating the fixture is **not** a routine step. Against the current `eos` it
+no longer reproduces the committed file bit-for-bit — the arithmetic moved by
+~1 ulp when `eos` adopted its shared conserved-charge basis — so a regeneration
+silently moves the input the goldens were captured against. Run it only when the
+SFHo EoS or its parametrization genuinely changes, and re-capture the goldens
+deliberately when you do.
+
+`test/golden/regression.json` pins the engine's output at known points. Treat it
+as a **tripwire, not a target** — if a golden fails, find out why before touching
+the tolerance.
+
+**Two goldens currently fail, and both are known**: `test_regression_solver_cases`
+and `test_energy_barrier_matches_golden`. Neither is a physics change. Both
+compare round-off — ten quantities the CFL flavour lock forces to zero, compared
+*relatively*, and a `W(R)` curve reaching -1.5e+06 MeV compared *absolutely* at
+1e-9 — and both moved by ~1 ulp when `eos` adopted its shared conserved-charge
+basis. Every physically nonzero quantity still matches. Fixing them means
+re-deciding what the golden asserts, which is open work; the tolerances have
+**not** been loosened in the meantime.
 
 ---
 

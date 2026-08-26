@@ -22,32 +22,25 @@ outputs are directly comparable point by point.
 All three table kinds share ONE on-disk format: axis columns first, then the
 data columns, ravelled in Fortran order, under a `# key: value` header.
 
-This module re-exports the full public surface, so
-``from nucleation.tables import X`` keeps working for every X it ever exposed.
+This module re-exports the public surface, so ``from nucleation.tables import
+X`` keeps working for every public X the flat ``tables.py`` exposed. The private
+grid helpers are NOT re-exported: every consumer imports them from the submodule
+that defines them, which is where a private name should be reached.
 
 Grid W_c convention: NaN where a point did not converge / has no critical
 droplet (this is what round-trips through the .dat files). The engine's +inf
 "H-stable" convention lives in ``nucleation.critical`` / sigma_crit only.
 """
 
-from nucleation.tables.grid import (
-    GRID_AXES, QstarTableData, expand_grid,
-    # Private names kept importable: tables.py exposed them and other modules
-    # (critical.py, analysis/) import them by these exact names.
-    _EQ_TYPE_ALIASES, _BASE_DATA_KEYS, _COULOMB_EXTRA_KEYS,
-    _THERMAL_DATA_KEYS, _QUANTUM_DATA_KEYS, _COULOMB_MODES,
-    _grid_layout, _lambda_D_grid, _init_data, _store_result,
-    _compute_and_store_Rc, _build_H_from_table,
-)
+from nucleation.tables.grid import GRID_AXES, QstarTableData, expand_grid
 from nucleation.tables.qstar import (
     compute_Qstar_table, build_Qstar_interpolators,
-    load_Qstar_table, export_table, _compute_Qs_at_R,
+    load_Qstar_table, export_table,
 )
 from nucleation.tables.thermal import (
     ThermalNucleationObservables, compute_thermal_nucleation_observables,
     build_thermal_nucleation_interpolators,
     export_thermal_nucleation_table, load_thermal_nucleation_table,
-    _compute_thermal_nucleation_unpCFL,
 )
 from nucleation.tables.quantum import (
     QuantumNucleationObservables, compute_quantum_nucleation_observables,

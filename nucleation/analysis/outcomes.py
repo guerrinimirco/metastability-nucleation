@@ -44,7 +44,7 @@ import numpy as np
 
 from nucleation.conditions import hadronic_point
 from nucleation.analysis.sigma_crit import sigma_target_pt, star_shell_states
-from nucleation.analysis.stellar import TOV_COL, branch_interp, max_masses
+from nucleation.analysis.stellar import branch_interp, max_masses
 
 # Solar rest energy [erg]: converts a gravitational-mass deficit into the energy
 # released by the conversion.

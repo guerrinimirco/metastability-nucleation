@@ -27,11 +27,11 @@ from nucleation.quark import custom_params
 from eos.alphabag.solver import (solve_cfl, solve_beta_eq_neutrinoless,
                                  solve_fixed_yc_ys)
 from eos.general.state import EOSTable_for_TOV
-from eos.astro.tov.solver import (generate_ec_logspace,
-                            compute_tov_sequence, truncate_to_stable_branch)
+from eos.astro.tov.solver import (compute_tov_sequence,
+                                  truncate_to_stable_branch)
 from nucleation.composition import get_solver_Qs
 from nucleation.critical import _build_H_from_interp
-from nucleation.analysis.config import FilterConfig, REASON_CODE
+from nucleation.analysis.config import FilterConfig
 
 # =============================================================================
 #  CFL EoS + filters

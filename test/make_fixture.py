@@ -1,6 +1,6 @@
 """Regenerate the committed hadronic test fixture.
 
-    python -m nucleation.tests.make_fixture
+    python test/make_fixture.py
 
 Writes ``data/eos_hadronic_trapped_fixture.dat`` (~250 KB, ~5 s). You only need
 to run this if the SFHo EoS or its parametrization changes -- the file is
@@ -116,7 +116,7 @@ def main():
         print_results=False, print_errors=True, print_timing=False,
         save_to_file=True, output_filename=OUT))
     print(f"wrote {OUT} in {time.time() - t0:.0f}s")
-    print("now run: pytest nucleation -q   (goldens must still pass)")
+    print("now run: pytest test -q   (goldens must still pass)")
 
 
 if __name__ == '__main__':

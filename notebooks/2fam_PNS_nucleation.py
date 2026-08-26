@@ -86,19 +86,27 @@ from scipy.interpolate import interp1d
 from scipy.stats import spearmanr
 
 # --- eos: equation of state, TOV structure, publication figure style -----------
-from eos.sfho.parameters import create_custom_parametrization
-from eos.sfho.compute_tables import (
+# Both model packages name their grid driver TableSettings/compute_table, so the
+# alphaBag pair is aliased -- two settings dataclasses cannot share one name, and
+# the call sites should say which phase they build. EOSTable_for_TOV comes from
+# eos.general, not from astro: it is the contract surface both layers may import.
+from eos.sfho.nmp import create_custom_parametrization
+from eos.sfho.table import (
     TableSettings, compute_table,
     load_eos_table as load_eos_table_sfho,
     build_interpolators as build_interpolators_sfho,
 )
-from eos.alphabag.parameters import get_alphabag_custom
-from eos.alphabag.compute_tables import AlphaBagTableSettings, compute_alphabag_table
-from eos.alphabag.thermodynamics_quarks import T_critical
-from eos.tov.solver import (EOSTable_for_TOV, generate_ec_logspace,
-                            compute_tov_sequence, truncate_to_stable_branch)
+from eos.alphabag.table import (TableSettings as AlphaBagTableSettings,
+                                compute_table as compute_alphabag_table)
+from eos.alphabag.thermodynamics import T_critical
+from eos.general.state import EOSTable_for_TOV
+from eos.astro.tov.solver import (generate_ec_logspace,
+                                  compute_tov_sequence, truncate_to_stable_branch)
 
 # --- nucleation: the core engine ----------------------------------------------
+# Aliased: `custom_params` is also the name of an sfho TableSettings field
+# used a few cells below, and one notebook namespace cannot carry both.
+from nucleation.quark import custom_params as quark_params
 from nucleation import (
     work_of_formation, effective_inertia, quantum_nucleation_time,
     compute_Qstar_table, build_Qstar_interpolators, load_Qstar_table,
@@ -771,7 +779,7 @@ def qstar_stem(stag, charge, phase, sigma):
 
 for _p in quark_param_sets:
     _stag = q_tag(_p)
-    _pars = get_alphabag_custom(alpha=_p['alpha'], B4=_p['B4'], m_s=_p['m_s'])
+    _pars = quark_params(alpha=_p['alpha'], B4=_p['B4'], m_s=_p['m_s'])
     for _charge in CHARGE_MODES:
         _cn = 'local' if _charge == 'lcn' else 'global'
         _sigma_in_solve = (_charge == 'coulomb_minimize')
@@ -841,7 +849,7 @@ _T_grid_H = H_table['trapped'].grids['T']
 
 for _p in quark_param_sets:
     _stag = q_tag(_p)
-    _pars = get_alphabag_custom(alpha=_p['alpha'], B4=_p['B4'], m_s=_p['m_s'])
+    _pars = quark_params(alpha=_p['alpha'], B4=_p['B4'], m_s=_p['m_s'])
     # R_x(T) = hbar c / Delta(T), the pairing coherence radius, evaluated on the
     # WHOLE hadronic T grid. It must be an array: the gap melts as T rises, so a
     # single scalar R_x would put the unpaired->CFL switch at the same radius in
@@ -1118,8 +1126,8 @@ print("\nPart III complete: ready for figures.")
 
 # %%
 _demo_p = quark_param_sets[0]
-_demo_pars = get_alphabag_custom(alpha=_demo_p['alpha'], B4=_demo_p['B4'],
-                                 m_s=_demo_p['m_s'])
+_demo_pars = quark_params(alpha=_demo_p['alpha'], B4=_demo_p['B4'],
+                          m_s=_demo_p['m_s'])
 _demo_nB, _demo_T, _demo_sig = 3.5 * n_sat, 30.0, 100.0
 
 # (1) one point, everything about it
@@ -1236,8 +1244,8 @@ for F1_SET in [quark_param_sets[0]]:
     _PHASE_FILL = {'unpCFL': True, 'cfl': False, 'unpaired': False}   # dot fill
 
     _stag   = q_tag(F1_SET)
-    _params = get_alphabag_custom(alpha=F1_SET['alpha'], B4=F1_SET['B4'],
-                                  m_s=F1_SET['m_s'])
+    _params = quark_params(alpha=F1_SET['alpha'], B4=F1_SET['B4'],
+                           m_s=F1_SET['m_s'])
 
     def _f1_get(phase, sg=F1_SIGMA):
         """The nucleation table for this method/phase/set/sigma (or None)."""
@@ -1568,8 +1576,8 @@ def _tau_lbl(t):
 
 for FN2_SET in quark_param_sets:
     _tag    = q_tag(FN2_SET)
-    _params = get_alphabag_custom(alpha=FN2_SET['alpha'], B4=FN2_SET['B4'],
-                                  m_s=FN2_SET['m_s'])
+    _params = quark_params(alpha=FN2_SET['alpha'], B4=FN2_SET['B4'],
+                           m_s=FN2_SET['m_s'])
     _D0     = FN2_SET['Delta0']
     _T_CFL  = float(T_critical(_D0))          # CFL is undefined above this
 
@@ -1627,7 +1635,7 @@ for FN2_SET in quark_param_sets:
                  zip(quark_param_sets,
                      np.linspace(0.15, 0.8, max(len(quark_param_sets), 2)))}
         for p in quark_param_sets:
-            _pp = get_alphabag_custom(alpha=p['alpha'], B4=p['B4'], m_s=p['m_s'])
+            _pp = quark_params(alpha=p['alpha'], B4=p['B4'], m_s=p['m_s'])
             for ph, ls in _phase_ls:
                 axD.plot(_Md, _sigma_crit_vs_M(_pp, p['Delta0'], ph, nuc_cfg),
                          color=_dcol[q_tag(p)], ls=ls, lw=PHASE_LW[ph],
@@ -2035,8 +2043,8 @@ plt.show()
 # =============================================================================
 APP_SET = quark_param_sets[0]
 APP_TAG = q_tag(APP_SET)
-APP_PAR = get_alphabag_custom(alpha=APP_SET['alpha'], B4=APP_SET['B4'],
-                              m_s=APP_SET['m_s'])
+APP_PAR = quark_params(alpha=APP_SET['alpha'], B4=APP_SET['B4'],
+                       m_s=APP_SET['m_s'])
 APP_SIG = FIG_SIGMAS['appA_charge'][0]           # sigma of both panels
 APP_MT0 = MT0_REF                                # reference PNS
 APP_YL  = PNS_TMAX['YLH']                        # the t_Tmax snapshot
@@ -2323,7 +2331,7 @@ TABLE_SHELLS = None
 
 _rows = []
 for _p in TABLE_SETS:
-    _pars = get_alphabag_custom(alpha=_p['alpha'], B4=_p['B4'], m_s=_p['m_s'])
+    _pars = quark_params(alpha=_p['alpha'], B4=_p['B4'], m_s=_p['m_s'])
     # M_QS(M_B): conversion conserves baryon number, so the remnant is read off
     # the cold quark-star sequence at fixed M_B.
     _M_QS = branch_interp(qs_tov[q_tag(_p)], 'M_B', 'M')
@@ -3249,8 +3257,8 @@ V6_SIGMA = 100.0           # MeV/fm^2, for panel (a)
 V6_SIGMAS = np.linspace(40., 250., 12 if REDUCED_GRID else 30)   # panel (b)
 V6_R = np.linspace(0.02, 12.0, 500)
 
-_v6_par = get_alphabag_custom(alpha=V6_SET['alpha'], B4=V6_SET['B4'],
-                              m_s=V6_SET['m_s'])
+_v6_par = quark_params(alpha=V6_SET['alpha'], B4=V6_SET['B4'],
+                       m_s=V6_SET['m_s'])
 _v6_nB, _v6_T, _ = central_state(MT0_REF, star_scan)
 print(f"V.6 at the reference PNS centre: n_B = {_v6_nB/n_sat:.2f} n_sat, "
       f"T = {_v6_T:.1f} MeV")
@@ -3356,8 +3364,8 @@ V7_SIGMA = 100.0               # MeV/fm^2
 V7_T = np.linspace(1.0, 60.0, 15 if REDUCED_GRID else 40)   # MeV
 V7_NC = 1e48                   # attempt centres in the nucleation volume
 
-_v7_par = get_alphabag_custom(alpha=V7_SET['alpha'], B4=V7_SET['B4'],
-                              m_s=V7_SET['m_s'])
+_v7_par = quark_params(alpha=V7_SET['alpha'], B4=V7_SET['B4'],
+                       m_s=V7_SET['m_s'])
 _v7_nB = _v6_nB                # the same reference centre as V.6
 M_NEUTRON = 939.565            # MeV, for the hadronic mass density rho_H
 

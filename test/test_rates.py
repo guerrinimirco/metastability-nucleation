@@ -1,5 +1,4 @@
 """Langer thermal rate + WKB quantum time regression."""
-import numpy as np
 import pytest
 
 from nucleation.barrier import (

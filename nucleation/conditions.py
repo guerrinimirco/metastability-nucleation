@@ -48,7 +48,7 @@ values along either axis). Everything public delegates to one of them, so the
 
 import numpy as np
 from types import SimpleNamespace
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from scipy.optimize import root_scalar
 from scipy.interpolate import RegularGridInterpolator, interp1d
 

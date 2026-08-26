@@ -12,7 +12,6 @@ drivers both consume one rather than re-solving compositions themselves.
 
 import os
 import numpy as np
-from types import SimpleNamespace
 from scipy.interpolate import RegularGridInterpolator
 
 from nucleation.barrier import electron_susceptibility, debye_length

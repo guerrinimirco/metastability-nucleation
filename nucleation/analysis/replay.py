@@ -14,8 +14,7 @@ from __future__ import annotations
 import numpy as np
 
 from eos.general.state import EOSTable_for_TOV
-from eos.astro.tov.solver import (generate_ec_logspace,
-                            compute_tov_sequence, truncate_to_stable_branch)
+from eos.astro.tov.solver import generate_ec_logspace, compute_tov_sequence
 from nucleation.analysis.config import FilterConfig
 from nucleation.analysis.filters import cfl_eos_at_params
 

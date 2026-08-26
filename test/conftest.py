@@ -15,7 +15,7 @@ at 936 points (247 KB) instead of the full 300x7x52 production table (37 MB).
 Adding nodes is safe because every bracket pair is adjacent in the production
 grid, so nothing can land strictly between a pair.
 
-Regenerate with ``python -m nucleation.tests.make_fixture``.
+Regenerate with ``python test/make_fixture.py``.
 
 Golden reference values live in ``golden/regression.json``; treat them as a
 TRIPWIRE, not a target -- never loosen a tolerance to make one pass.
@@ -24,7 +24,6 @@ import json
 import os
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -58,7 +57,7 @@ def H_interp():
     # whole suite go green-but-hollow when output/ disappeared.
     assert os.path.exists(H_TABLE), (
         f"missing committed fixture {H_TABLE}\n"
-        f"regenerate with: python -m nucleation.tests.make_fixture")
+        f"regenerate with: python test/make_fixture.py")
     from eos.sfho.table import (
         load_eos_table as load_h, build_interpolators as build_h)
     return build_h(load_h(H_TABLE, 'trapped_neutrinos'))
@@ -69,7 +68,7 @@ def H_table():
     """The raw fixture table (grids + data), for the grid-driver tests."""
     assert os.path.exists(H_TABLE), (
         f"missing committed fixture {H_TABLE}\n"
-        f"regenerate with: python -m nucleation.tests.make_fixture")
+        f"regenerate with: python test/make_fixture.py")
     from eos.sfho.table import load_eos_table as load_h
     return load_h(H_TABLE, 'trapped_neutrinos')
 

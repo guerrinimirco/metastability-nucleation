@@ -7,8 +7,7 @@ how to expand a hadronic table into full-shape arrays, and where a solver result
 goes once computed. No physics decisions live here -- only shape.
 
 This module imports nothing from the other `tables` submodules, so it is the
-bottom of the package and safe to import from anywhere (including
-`nucleation.critical`, which needs `_BASE_DATA_KEYS`).
+bottom of the package and safe to import from anywhere.
 """
 
 import numpy as np
