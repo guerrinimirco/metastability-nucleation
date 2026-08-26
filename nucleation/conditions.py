@@ -52,7 +52,7 @@ from dataclasses import dataclass, field
 from scipy.optimize import root_scalar
 from scipy.interpolate import RegularGridInterpolator, interp1d
 
-from eos.alphabag.thermodynamics_quarks import T_critical
+from eos.alphabag.thermodynamics import T_critical
 from eos.general.physics_constants import hc
 from nucleation.tables import GRID_AXES
 from nucleation.critical import critical_droplet
@@ -449,7 +449,7 @@ def hadronic_point(H_trapped, n_B, Y_L, T):
         P_total=float(H_trapped['P'](*pt)),   e_total=float(H_trapped['eps'](*pt)),
         mu_B=float(H_trapped['mu_B'](*pt)),   mu_C=float(H_trapped['mu_C'](*pt)),
         mu_S=float(H_trapped['mu_S'](*pt)),   mu_e=float(H_trapped['mu_e'](*pt)),
-        mu_nu=float(H_trapped['mu_nu'](*pt)),
+        mu_nu=float(H_trapped['mu_nue'](*pt)),
         Y_C=float(H_trapped['Y_C'](*pt)),     Y_S=float(H_trapped['Y_S'](*pt)))
     h.Y_e = h.Y_C
     h.Y_nu = float(Y_L) - h.Y_C

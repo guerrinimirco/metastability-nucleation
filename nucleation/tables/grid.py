@@ -82,7 +82,7 @@ def _grid_layout(hadronic_table):
         return ((len(n_B_arr), len(T_arr)),
                 {'n_B_H': n_B_arr, 'T': T_arr}, None, None, n_B_arr, T_arr)
     if eq_type == 'trapped_neutrinos':
-        outer = grids['Y_L']
+        outer = grids['Y_Le']
         return ((len(n_B_arr), len(outer), len(T_arr)),
                 {'n_B_H': n_B_arr, 'Y_L_H': outer, 'T': T_arr},
                 'Y_L', outer, n_B_arr, T_arr)
@@ -112,8 +112,8 @@ def expand_grid(hadronic_table):
         Y_nu_H = np.zeros(shape)
     elif eq_type == 'trapped_neutrinos':
         n_B_H, Y_L_H, T_H = np.meshgrid(
-            grids['n_B'], grids['Y_L'], grids['T'], indexing='ij')
-        mu_nu_H = h_d['mu_nu']
+            grids['n_B'], grids['Y_Le'], grids['T'], indexing='ij')
+        mu_nu_H = h_d['mu_nue']
         Y_nu_H = Y_L_H - h_d['Y_C']
     else:  # fixed_yc
         n_B_H, _, T_H = np.meshgrid(
@@ -210,7 +210,7 @@ def _build_H_from_table(hadronic_table, eq_type, idx, grid_values):
     elif eq_type == 'trapped_neutrinos':
         Y_C_H = d['Y_C'][idx]
         Y_nu = grid_values['Y_L'] - Y_C_H
-        mu_nu = d['mu_nu'][idx]
+        mu_nu = d['mu_nue'][idx]
     elif eq_type == 'fixed_yc':
         Y_C_H = grid_values['Y_C']
         Y_nu = mu_nu = 0.0

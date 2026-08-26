@@ -43,7 +43,7 @@ def _small_H(H_table):
     sub = copy.copy(H_table)
     inB, iYL, iT = range(8, 14), range(0, 2), range(4, 7)
     sub.grids = {'n_B': H_table.grids['n_B'][8:14],
-                 'Y_L': H_table.grids['Y_L'][0:2],
+                 'Y_Le': H_table.grids['Y_Le'][0:2],
                  'T': H_table.grids['T'][4:7]}
     sub.data = {k: (v[np.ix_(inB, iYL, iT)] if getattr(v, 'ndim', 0) == 3 else v)
                 for k, v in H_table.data.items()}

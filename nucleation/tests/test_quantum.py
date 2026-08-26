@@ -31,7 +31,7 @@ def sub_H(H_table):
     sub = copy.copy(H_table)
     inB, iYL, iT = range(12, 18), range(2, 4), range(3, 6)
     sub.grids = {'n_B': H_table.grids['n_B'][12:18],
-                 'Y_L': H_table.grids['Y_L'][2:4],
+                 'Y_Le': H_table.grids['Y_Le'][2:4],
                  'T': H_table.grids['T'][3:6]}
     sub.data = {k: (v[np.ix_(inB, iYL, iT)] if getattr(v, 'ndim', 0) == 3 else v)
                 for k, v in H_table.data.items()}

@@ -95,8 +95,8 @@ def fixture_grids():
 
 
 def main():
-    from eos.sfho.parameters import create_custom_parametrization
-    from eos.sfho.compute_tables import TableSettings, compute_table
+    from eos.sfho.nmp import create_custom_parametrization
+    from eos.sfho.table import TableSettings, compute_table
 
     n_B, Y_L, T = fixture_grids()
     print(f"grid: n_B={len(n_B)}  Y_L={len(Y_L)}  T={len(T)}"

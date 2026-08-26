@@ -342,7 +342,7 @@ def _find_Rc_Wc_tanh(R_c_unp, R_c_cfl, Rx, S_func,
 def _build_H_from_interp(H_interp, pt, eq_type):
     """Evaluate hadronic interpolators at one point -> SimpleNamespace."""
     T = pt[-1]
-    mu_nu_val = float(H_interp['mu_nu'](*pt)) if 'mu_nu' in H_interp else 0.0
+    mu_nu_val = float(H_interp['mu_nue'](*pt)) if 'mu_nue' in H_interp else 0.0
     H = SimpleNamespace(
         P_total=float(H_interp['P'](*pt)), mu_B=float(H_interp['mu_B'](*pt)),
         mu_C=float(H_interp['mu_C'](*pt)), mu_S=float(H_interp['mu_S'](*pt)),

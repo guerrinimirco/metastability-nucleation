@@ -17,7 +17,7 @@ import time
 
 import numpy as np
 
-from eos.alphabag.parameters import get_alphabag_custom
+from nucleation.quark import custom_params
 from nucleation.analysis.config import FilterConfig, NucConfig, StarMatch, REASON_CODE
 from nucleation.analysis.filters import (passes_cfl_filters,
                                          passes_unpaired_filters,
@@ -208,7 +208,7 @@ def compute_sigma_crit(cfl_ok, MT0, flavor, charge, phase, alpha_slices, B4_grid
               f"{'parallel' if use_par else 'serial'}", flush=True)
     if not cells:
         return sig
-    pars = [get_alphabag_custom(alpha=alpha_slices[ia], B4=B4_grid[jx], m_s=m_s)
+    pars = [custom_params(alpha=alpha_slices[ia], B4=B4_grid[jx], m_s=m_s)
             for (ia, i, jx) in cells]
     D0s = [Delta0_grid[i] for (ia, i, jx) in cells]
     t0 = time.perf_counter()

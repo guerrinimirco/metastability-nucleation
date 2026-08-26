@@ -47,8 +47,8 @@ def buggy_cfl():
 
 @pytest.fixture(scope='session')
 def params():
-    from eos.alphabag.parameters import get_alphabag_custom
-    return get_alphabag_custom(alpha=0.15707963267948966, B4=145.0, m_s=100.0)
+    from nucleation.quark import custom_params
+    return custom_params(alpha=0.15707963267948966, B4=145.0, m_s=100.0)
 
 
 @pytest.fixture(scope='session')
@@ -59,7 +59,7 @@ def H_interp():
     assert os.path.exists(H_TABLE), (
         f"missing committed fixture {H_TABLE}\n"
         f"regenerate with: python -m nucleation.tests.make_fixture")
-    from eos.sfho.compute_tables import (
+    from eos.sfho.table import (
         load_eos_table as load_h, build_interpolators as build_h)
     return build_h(load_h(H_TABLE, 'trapped_neutrinos'))
 
@@ -70,7 +70,7 @@ def H_table():
     assert os.path.exists(H_TABLE), (
         f"missing committed fixture {H_TABLE}\n"
         f"regenerate with: python -m nucleation.tests.make_fixture")
-    from eos.sfho.compute_tables import load_eos_table as load_h
+    from eos.sfho.table import load_eos_table as load_h
     return load_h(H_TABLE, 'trapped_neutrinos')
 
 
@@ -83,7 +83,7 @@ def build_H(H_interp):
             P_total=float(H_interp['P'](*pt)), e_total=float(H_interp['eps'](*pt)),
             mu_B=float(H_interp['mu_B'](*pt)), mu_C=float(H_interp['mu_C'](*pt)),
             mu_S=float(H_interp['mu_S'](*pt)), mu_e=float(H_interp['mu_e'](*pt)),
-            mu_nu=float(H_interp['mu_nu'](*pt)),
+            mu_nu=float(H_interp['mu_nue'](*pt)),
             Y_C=float(H_interp['Y_C'](*pt)), Y_S=float(H_interp['Y_S'](*pt)))
         H.Y_e = H.Y_C
         H.Y_nu = float(YL) - H.Y_C

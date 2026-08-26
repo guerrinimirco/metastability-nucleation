@@ -23,10 +23,11 @@ import numpy as np
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
 
-from eos.alphabag.parameters import get_alphabag_custom
-from eos.alphabag.eos import (solve_cfl, solve_alphabag_beta_eq,
-                              solve_alphabag_fixed_yc_ys)
-from eos.tov.solver import (EOSTable_for_TOV, generate_ec_logspace,
+from nucleation.quark import custom_params
+from eos.alphabag.solver import (solve_cfl, solve_beta_eq_neutrinoless,
+                                 solve_fixed_yc_ys)
+from eos.general.state import EOSTable_for_TOV
+from eos.astro.tov.solver import (generate_ec_logspace,
                             compute_tov_sequence, truncate_to_stable_branch)
 from nucleation.composition import get_solver_Qs
 from nucleation.critical import _build_H_from_interp
@@ -38,7 +39,7 @@ from nucleation.analysis.config import FilterConfig, REASON_CODE
 def cfl_eos_at_params(alpha, B4, Delta0, cfg: FilterConfig):
     """Solve the CFL beta-eq EoS at T=cfg.T_eos over cfg.n_B_grid (warm-started).
     Returns (P, e, mu, ok-mask)."""
-    p = get_alphabag_custom(alpha=alpha, B4=B4, m_s=cfg.m_s)
+    p = custom_params(alpha=alpha, B4=B4, m_s=cfg.m_s)
     n = cfg.n_B_grid
     P = np.full_like(n, np.nan); e = np.full_like(n, np.nan); mu = np.full_like(n, np.nan)
     ok = np.zeros_like(n, dtype=bool)
@@ -61,14 +62,14 @@ def unpaired_eos_at_params(alpha, B4, cfg: FilterConfig):
     """Solve the UNPAIRED beta-eq alpha-Bag EoS at T=cfg.T_eos over cfg.n_B_grid
     (warm-started). Returns (P, e, mu, ok-mask). No Delta_0 — an unpaired droplet
     has no CFL gap, so the unpaired-matter viability filters never reference it."""
-    p = get_alphabag_custom(alpha=alpha, B4=B4, m_s=cfg.m_s)
+    p = custom_params(alpha=alpha, B4=B4, m_s=cfg.m_s)
     n = cfg.n_B_grid
     P = np.full_like(n, np.nan); e = np.full_like(n, np.nan); mu = np.full_like(n, np.nan)
     ok = np.zeros_like(n, dtype=bool)
     guess = None
     for i, nB in enumerate(n):
         try:
-            r = solve_alphabag_beta_eq(nB, cfg.T_eos, p, include_photons=False,
+            r = solve_beta_eq_neutrinoless(nB, cfg.T_eos, p, include_photons=False,
                                        include_gluons=True, initial_guess=guess)
         except Exception:
             r = None
@@ -96,13 +97,13 @@ def ud_eps_per_nB(alpha, B4, cfg: FilterConfig):
     if no P=0 crossing. INDEPENDENT of Delta0 and m_s (no strange quarks). The SQM
     hypothesis needs this ABOVE ~930 MeV so ordinary (ud) nuclei do not decay to
     quark matter -- the companion to the 3-flavor Witten bound."""
-    p = get_alphabag_custom(alpha=alpha, B4=B4, m_s=cfg.m_s)
+    p = custom_params(alpha=alpha, B4=B4, m_s=cfg.m_s)
     n = cfg.n_B_grid
     P = np.full_like(n, np.nan)
     e = np.full_like(n, np.nan)
 
     def solve(nB, yc, guess):
-        return solve_alphabag_fixed_yc_ys(nB, yc, 0.0, cfg.T_eos, p,
+        return solve_fixed_yc_ys(nB, yc, 0.0, cfg.T_eos, p,
                                           include_photons=False, include_gluons=True,
                                           include_electrons=True, initial_guess=guess)
 

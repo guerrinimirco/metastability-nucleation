@@ -22,7 +22,7 @@ from typing import Callable
 import numpy as np
 from scipy.interpolate import interp1d
 
-from eos.tov.solver import generate_ec_logspace
+from eos.astro.tov.solver import generate_ec_logspace
 
 # Filter-reason -> integer code. The filters short-circuit cheap->expensive, so
 # codes are *nested*: contouring this field at 1.5 / 2.5 gives the Witten / (weak)

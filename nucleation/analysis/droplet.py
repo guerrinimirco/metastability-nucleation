@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from eos.alphabag.parameters import get_alphabag_custom
+from nucleation.quark import custom_params
 from nucleation.conditions import crossover_radius, hadronic_point
 from nucleation.analysis.sigma_crit import (central_state, critical_droplet_pt,
                                             sigma_target_pt, tau_pt)
@@ -81,7 +81,7 @@ def droplet_regime_grid(sig_crit, alpha_slices, B4_grid, Delta0_grid, *,
         # Delta0 = 0 makes crossover_radius divide by zero; the +inf it returns
         # is the correct answer (no pairing -> unpaired at every radius).
         with np.errstate(divide='ignore', invalid='ignore'):
-            p = get_alphabag_custom(alpha=alpha, B4=B4, m_s=m_s)
+            p = custom_params(alpha=alpha, B4=B4, m_s=m_s)
             R_star = critical_droplet_pt(sc, *base, 'unpCFL', {}, p, Delta0, nuc)[0]
             if not np.isfinite(R_star):
                 return REGIME['none']
@@ -134,7 +134,7 @@ def barrier_ratio_map(sig_crit, alpha_slices, B4_grid, Delta0_grid, *,
         if not (np.isfinite(sc) and np.isfinite(sig)):
             return np.nan, np.nan, -1
         with np.errstate(divide='ignore', invalid='ignore'):
-            p = get_alphabag_custom(alpha=alpha, B4=B4, m_s=m_s)
+            p = custom_params(alpha=alpha, B4=B4, m_s=m_s)
             # One cache per shell, reused for the second call: re-solving the
             # winning shell for W* then costs only the barrier maximization,
             # not the composition solve.

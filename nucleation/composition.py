@@ -42,18 +42,14 @@ Internal helpers: hadronic_guess, robust_root.
 import numpy as np
 from scipy.optimize import root
 
-from eos.alphabag.eos import (
-    compute_alphabag_total_thermo_from_mu,
-    compute_cfl_total_thermo_from_mu,
-)
-from eos.alphabag.thermodynamics_quarks import (
-    compute_alphabag_thermo_from_mu,
-    compute_cfl_thermo_from_mu,
+from eos.alphabag.thermodynamics import (
+    thermo_from_mu, cfl_thermo_from_mu,
 )
 from eos.general.thermodynamics_leptons import electron_thermo
 from nucleation.barrier import (
     coulomb_delta_mu_e, coulomb_delta_P, driving_force,
 )
+from nucleation.quark import cfl_total_thermo_from_mu, total_thermo_from_mu
 
 
 # Cutoff (fm) on the GCN critical radius above which the full coulomb_minimize
@@ -113,11 +109,11 @@ def solve_frozen(H, params, charge_neutrality,
       1. Y_C^Qs = Y_C^H          2. Y_S^Qs = Y_S^H
       3. charge neutrality (local or global)
       4. dW/dn_B = 0  (reduces to the Gibbs-per-baryon match given 1-3)
-    Returns an AlphaBagEOSResult or None.
+    Returns a DropletThermo or None.
     """
     def equations(x):
         mu_u, mu_d, mu_s, mu_e = x
-        Qs = compute_alphabag_thermo_from_mu(mu_u, mu_d, mu_s, H.T, params)
+        Qs = thermo_from_mu(mu_u, mu_d, mu_s, H.T, params)
         e_Qs = electron_thermo(mu_e, H.T)
 
         if charge_neutrality == "local":
@@ -145,7 +141,7 @@ def solve_frozen(H, params, charge_neutrality,
     if sol is None:
         return None
     mu_u, mu_d, mu_s, mu_e = sol.x
-    return compute_alphabag_total_thermo_from_mu(
+    return total_thermo_from_mu(
         mu_u, mu_d, mu_s, mu_e, H.T, params,
         include_photons=include_photons, include_gluons=include_gluons,
         include_thermal_neutrinos=include_thermal_neutrinos, mu_nu=H.mu_nu)
@@ -164,11 +160,11 @@ def solve_saddlepoint(H, params, charge_neutrality,
       2. mu_S^Qs = mu_S^H                    (dW/dY_S = 0)
       3. charge neutrality (local or global)
       4. dW/dn_B = 0  (reduces to mu_B^Qs = mu_B^H given 1-3)
-    Returns an AlphaBagEOSResult or None.
+    Returns a DropletThermo or None.
     """
     def equations(x):
         mu_u, mu_d, mu_s, mu_e = x
-        Qs = compute_alphabag_thermo_from_mu(mu_u, mu_d, mu_s, H.T, params)
+        Qs = thermo_from_mu(mu_u, mu_d, mu_s, H.T, params)
         e_Qs = electron_thermo(mu_e, H.T)
         Y_e_Qs = e_Qs.n / Qs.n_B
 
@@ -197,7 +193,7 @@ def solve_saddlepoint(H, params, charge_neutrality,
     if sol is None:
         return None
     mu_u, mu_d, mu_s, mu_e = sol.x
-    return compute_alphabag_total_thermo_from_mu(
+    return total_thermo_from_mu(
         mu_u, mu_d, mu_s, mu_e, H.T, params,
         include_photons=include_photons, include_gluons=include_gluons,
         include_thermal_neutrinos=include_thermal_neutrinos, mu_nu=H.mu_nu)
@@ -216,11 +212,11 @@ def solve_saddlepoint_cfl(H, params, Delta0, charge_neutrality,
       3. charge neutrality (local or global)
       4. dW/dn_B = 0.  For CFL the saddle chem-sum reduces to
          mu_B^Qs + mu_S^Qs = mu_B^H + mu_S^H (Gibbs per baryon incl. strangeness).
-    Returns a CFLEOSResult or None.
+    Returns a DropletThermo or None.
     """
     def equations(x):
         mu_u, mu_d, mu_s, mu_e = x
-        Qs = compute_cfl_thermo_from_mu(mu_u, mu_d, mu_s, H.T, Delta0, params)
+        Qs = cfl_thermo_from_mu(mu_u, mu_d, mu_s, H.T, Delta0, params)
         e_Qs = electron_thermo(mu_e, H.T)
         Y_e_Qs = e_Qs.n / Qs.n_B
 
@@ -247,7 +243,7 @@ def solve_saddlepoint_cfl(H, params, Delta0, charge_neutrality,
     if sol is None:
         return None
     mu_u, mu_d, mu_s, mu_e = sol.x
-    return compute_cfl_total_thermo_from_mu(
+    return cfl_total_thermo_from_mu(
         mu_u, mu_d, mu_s, mu_e, H.T, Delta0, params,
         include_photons=include_photons, include_gluons=include_gluons,
         include_thermal_neutrinos=include_thermal_neutrinos, mu_nu=H.mu_nu)
@@ -269,7 +265,7 @@ def solve_coulomb_minimize(H, params, sigma,
       4. mu_e = mu_e^H + coulomb_delta_mu_e(R)     (dW/dY_e = 0, GCN + Coulomb)
       5. P_Qs - P_H - 2 sigma/R + coulomb_delta_P(R) = 0   (dW/dR = 0)
 
-    Returns (AlphaBagEOSResult, R_c) or None. `R_gcn_skip` (fm): above this
+    Returns (DropletThermo, R_c) or None. `R_gcn_skip` (fm): above this
     GCN critical radius, make only a single quick attempt (no fallbacks).
     """
     result_gcn = solve_saddlepoint(
@@ -283,7 +279,7 @@ def solve_coulomb_minimize(H, params, sigma,
         mu_u, mu_d, mu_s, mu_e, R = x
         if R <= 0:
             return [1e10] * 5
-        Qs = compute_alphabag_total_thermo_from_mu(
+        Qs = total_thermo_from_mu(
             mu_u, mu_d, mu_s, mu_e, H.T, params,
             include_photons=include_photons, include_gluons=include_gluons,
             include_thermal_neutrinos=include_thermal_neutrinos, mu_nu=H.mu_nu)
@@ -331,7 +327,7 @@ def solve_coulomb_minimize(H, params, sigma,
             return None
 
     mu_u, mu_d, mu_s, mu_e, R_c = sol.x
-    result = compute_alphabag_total_thermo_from_mu(
+    result = total_thermo_from_mu(
         mu_u, mu_d, mu_s, mu_e, H.T, params,
         include_photons=include_photons, include_gluons=include_gluons,
         include_thermal_neutrinos=include_thermal_neutrinos, mu_nu=H.mu_nu)
@@ -347,11 +343,11 @@ def solve_coulomb_minimize_at_R(R, H, params, sigma,
     """Q* at a FIXED R with Coulomb in the composition (for building W(R)).
 
     Same equations 1-4 as ``solve_coulomb_minimize`` but R held fixed (no
-    dW/dR). Returns an AlphaBagEOSResult or None.
+    dW/dR). Returns a DropletThermo or None.
     """
     def equations(x):
         mu_u, mu_d, mu_s, mu_e = x
-        Qs = compute_alphabag_total_thermo_from_mu(
+        Qs = total_thermo_from_mu(
             mu_u, mu_d, mu_s, mu_e, H.T, params,
             include_photons=include_photons, include_gluons=include_gluons,
             include_thermal_neutrinos=include_thermal_neutrinos, mu_nu=H.mu_nu)
@@ -369,7 +365,7 @@ def solve_coulomb_minimize_at_R(R, H, params, sigma,
     if sol is None:
         return None
     mu_u, mu_d, mu_s, mu_e = sol.x
-    return compute_alphabag_total_thermo_from_mu(
+    return total_thermo_from_mu(
         mu_u, mu_d, mu_s, mu_e, H.T, params,
         include_photons=include_photons, include_gluons=include_gluons,
         include_thermal_neutrinos=include_thermal_neutrinos, mu_nu=H.mu_nu)
@@ -393,7 +389,7 @@ def solve_coulomb_minimize_cfl(H, params, Delta0, sigma,
     Equation 4 is the CFL saddle condition: for Y_S = 1 the strangeness carries
     chemical work, so the Gibbs-per-baryon match INCLUDES mu_S (mu_B + mu_S),
     NOT mu_B alone. This makes R from the 5-eq solve coincide with argmax_R W(R).
-    Returns (CFLEOSResult, R_c) or None.
+    Returns (DropletThermo, R_c) or None.
     """
     result_gcn = solve_saddlepoint_cfl(
         H, params, Delta0, charge_neutrality='global',
@@ -406,7 +402,7 @@ def solve_coulomb_minimize_cfl(H, params, Delta0, sigma,
         mu_u, mu_d, mu_s, mu_e, R = x
         if R <= 0:
             return [1e10] * 5
-        Qs = compute_cfl_total_thermo_from_mu(
+        Qs = cfl_total_thermo_from_mu(
             mu_u, mu_d, mu_s, mu_e, H.T, Delta0, params,
             include_photons=include_photons, include_gluons=include_gluons,
             include_thermal_neutrinos=include_thermal_neutrinos, mu_nu=H.mu_nu)
@@ -449,7 +445,7 @@ def solve_coulomb_minimize_cfl(H, params, Delta0, sigma,
             return None
 
     mu_u, mu_d, mu_s, mu_e, R_c = sol.x
-    result = compute_cfl_total_thermo_from_mu(
+    result = cfl_total_thermo_from_mu(
         mu_u, mu_d, mu_s, mu_e, H.T, Delta0, params,
         include_photons=include_photons, include_gluons=include_gluons,
         include_thermal_neutrinos=include_thermal_neutrinos, mu_nu=H.mu_nu)
@@ -467,11 +463,11 @@ def solve_coulomb_minimize_cfl_at_R(R, H, params, Delta0, sigma,
 
     Equations 1-4 of ``solve_coulomb_minimize_cfl`` with R held fixed; eq 4 is
     the corrected CFL saddle mu_B^Qs + mu_S^Qs = mu_B^H + mu_S^H.
-    Returns a CFLEOSResult or None.
+    Returns a DropletThermo or None.
     """
     def equations(x):
         mu_u, mu_d, mu_s, mu_e = x
-        Qs = compute_cfl_total_thermo_from_mu(
+        Qs = cfl_total_thermo_from_mu(
             mu_u, mu_d, mu_s, mu_e, H.T, Delta0, params,
             include_photons=include_photons, include_gluons=include_gluons,
             include_thermal_neutrinos=include_thermal_neutrinos, mu_nu=H.mu_nu)
@@ -489,7 +485,7 @@ def solve_coulomb_minimize_cfl_at_R(R, H, params, Delta0, sigma,
     if sol is None:
         return None
     mu_u, mu_d, mu_s, mu_e = sol.x
-    return compute_cfl_total_thermo_from_mu(
+    return cfl_total_thermo_from_mu(
         mu_u, mu_d, mu_s, mu_e, H.T, Delta0, params,
         include_photons=include_photons, include_gluons=include_gluons,
         include_thermal_neutrinos=include_thermal_neutrinos, mu_nu=H.mu_nu)

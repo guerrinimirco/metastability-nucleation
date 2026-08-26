@@ -50,7 +50,8 @@ def test_no_undefined_names():
 
     Why: splitting tables.py and analysis/sigma_crit.py into packages moved
     functions away from the imports they relied on, and two names
-    (`ud_eps_per_nB`, `get_alphabag_custom`) ended up used but not imported.
+    (`ud_eps_per_nB`, and the alphaBag custom-parameter helper) ended up used
+    but not imported.
     Both sat inside joblib-parallel branches that no test reached, so the suite
     stayed green and the failure only appeared during a full notebook run.
 
