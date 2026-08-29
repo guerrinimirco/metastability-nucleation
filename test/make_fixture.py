@@ -65,7 +65,7 @@ N_Y_L = 4                                                  # 0.10,0.15,0.20,0.25
 
 # --- SFHo parametrization, verbatim from the notebook (Part I) ---------------
 PARAM_KW = dict(U_Lambda_N=-28.0, U_Sigma_N=+30.0, U_Xi_N=-18.0,
-                x_sigma_delta=1.15, x_omega_delta=1.0, x_rho_delta=1.0,
+                x_Delta_sigma=1.15, x_Delta_omega=1.0, x_Delta_rho=1.0,
                 name="2fam_phi_xsd115")
 
 
@@ -95,7 +95,7 @@ def fixture_grids():
 
 
 def main():
-    from eos.sfho.nmp import create_custom_parametrization
+    from eos.sfho.nmp import from_potential_depths
     from eos.sfho.table import TableSettings, compute_table
 
     n_B, Y_L, T = fixture_grids()
@@ -107,7 +107,7 @@ def main():
     t0 = time.time()
     compute_table(TableSettings(
         parametrization='2fam_phi',
-        custom_params=create_custom_parametrization(**PARAM_KW),
+        custom_params=from_potential_depths(**PARAM_KW),
         particle_content='nucleons_hyperons_deltas',
         n_B_values=n_B, Y_L_values=Y_L, T_values=T,
         equilibrium='trapped_neutrinos',

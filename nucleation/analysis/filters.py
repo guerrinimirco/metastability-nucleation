@@ -26,6 +26,7 @@ from scipy.optimize import brentq
 from nucleation.quark import custom_params
 from eos.alphabag.solver import (solve_cfl, solve_beta_eq_neutrinoless,
                                  solve_fixed_yc_ys)
+from eos.alphabag.species import SpeciesFlags
 from eos.general.state import EOSTable_for_TOV
 from eos.astro.tov.solver import (compute_tov_sequence,
                                   truncate_to_stable_branch)
@@ -46,13 +47,18 @@ def cfl_eos_at_params(alpha, B4, Delta0, cfg: FilterConfig):
     guess = None
     for i, nB in enumerate(n):
         try:
-            r = solve_cfl(nB, cfg.T_eos, Delta0, p, include_photons=False,
-                          include_gluons=True, initial_guess=guess)
-        except Exception:
+            # No gluons: in the paired phase all eight are Meissner-massive,
+            # only the rotated photon stays massless, and eos refuses the flag
+            # rather than dropping the sector silently. At T_eos = 0 the gas
+            # contributed nothing anyway, so no number here moves.
+            r = solve_cfl(p, nB, cfg.T_eos, Delta0,
+                          SpeciesFlags(photons=False, gluons=False),
+                          initial_guess=guess)
+        except (RuntimeError, ValueError):
             r = None
         if r is None or not r.converged or r.error > 1e-6:
             continue
-        P[i], e[i], mu[i] = r.P_total, r.e_total, r.mu_B
+        P[i], e[i], mu[i] = r.P, r.eps, r.mu_B
         guess = np.array([r.mu_u, r.mu_d, r.mu_s])
         ok[i] = True
     return P, e, mu, ok
@@ -69,13 +75,19 @@ def unpaired_eos_at_params(alpha, B4, cfg: FilterConfig):
     guess = None
     for i, nB in enumerate(n):
         try:
-            r = solve_beta_eq_neutrinoless(nB, cfg.T_eos, p, include_photons=False,
-                                       include_gluons=True, initial_guess=guess)
-        except Exception:
+            # Gluons on, as published: this is the unpaired phase, where the
+            # eight of them are massless and the sector is a real choice. It
+            # reads as an asymmetry against the CFL path above, which must say
+            # False -- at cfg.T_eos = 0 both gases contribute exactly zero, so
+            # the two branches are still being compared on equal terms.
+            r = solve_beta_eq_neutrinoless(p, nB, cfg.T_eos,
+                                       SpeciesFlags(photons=False, gluons=True),
+                                       initial_guess=guess)
+        except (RuntimeError, ValueError):
             r = None
         if r is None or not r.converged or r.error > 1e-6:
             continue
-        P[i], e[i], mu[i] = r.P_total, r.e_total, r.mu_B
+        P[i], e[i], mu[i] = r.P, r.eps, r.mu_B
         guess = np.array([r.mu_u, r.mu_d, r.mu_s, r.mu_e])   # beta-eq has 4 unknowns
         ok[i] = True
     return P, e, mu, ok
@@ -103,9 +115,13 @@ def ud_eps_per_nB(alpha, B4, cfg: FilterConfig):
     e = np.full_like(n, np.nan)
 
     def solve(nB, yc, guess):
-        return solve_fixed_yc_ys(nB, yc, 0.0, cfg.T_eos, p,
-                                          include_photons=False, include_gluons=True,
-                                          include_electrons=True, initial_guess=guess)
+        # Unpaired again, so gluons on for the same reason. The electrons are
+        # NOT a species flag: on a fixed-fraction mode they are what `leptons=`
+        # adds to enforce total neutrality, and they must be here -- the root
+        # this brackets is mu_d - mu_u - mu_e.
+        return solve_fixed_yc_ys(p, nB, yc, 0.0, cfg.T_eos,
+                                          SpeciesFlags(photons=False, gluons=True),
+                                          leptons=True, initial_guess=guess)
 
     guess = None
     for i, nB in enumerate(n):
@@ -118,11 +134,11 @@ def ud_eps_per_nB(alpha, B4, cfg: FilterConfig):
                 continue
             yc = brentq(g, 1e-4, 0.34, xtol=1e-5)
             r = solve(nB, yc, guess)
-        except Exception:
+        except (RuntimeError, ValueError):
             continue
         if not r.converged or r.error > 1e-6:
             continue
-        P[i], e[i] = r.P_total, r.e_total
+        P[i], e[i] = r.P, r.eps
         guess = np.array([r.mu_u, r.mu_d, r.mu_s])   # warm-start the next density
     ok = np.isfinite(P)
     if ok.sum() < 5:

@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.4
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: Python 3
 #     language: python
@@ -85,12 +85,22 @@ from matplotlib.ticker import MultipleLocator, FuncFormatter
 from scipy.interpolate import interp1d
 from scipy.stats import spearmanr
 
+# --- make `eos` importable ----------------------------------------------------
+try:
+    import eos
+except ModuleNotFoundError:
+    import sys, subprocess
+    local = next((p / "eos" for p in (Path.cwd(), *Path.cwd().parents)
+                  if (p / "eos" / "eos" / "__init__.py").is_file()), None)
+    if local is not None:
+        sys.path.insert(0, str(local))
+    else:
+        subprocess.check_call([sys.executable, "-m", "pip", "install",
+                               "git+https://github.com/guerrinimirco/eos.git"])
+    import eos
+
 # --- eos: equation of state, TOV structure, publication figure style -----------
-# Both model packages name their grid driver TableSettings/compute_table, so the
-# alphaBag pair is aliased -- two settings dataclasses cannot share one name, and
-# the call sites should say which phase they build. EOSTable_for_TOV comes from
-# eos.general, not from astro: it is the contract surface both layers may import.
-from eos.sfho.nmp import create_custom_parametrization
+from eos.sfho.nmp import from_potential_depths
 from eos.sfho.table import (
     TableSettings, compute_table,
     load_eos_table as load_eos_table_sfho,
@@ -104,8 +114,6 @@ from eos.astro.tov.solver import (generate_ec_logspace,
                                   compute_tov_sequence, truncate_to_stable_branch)
 
 # --- nucleation: the core engine ----------------------------------------------
-# Aliased: `custom_params` is also the name of an sfho TableSettings field
-# used a few cells below, and one notebook namespace cannot carry both.
 from nucleation.quark import custom_params as quark_params
 from nucleation import (
     work_of_formation, effective_inertia, quantum_nucleation_time,
@@ -198,8 +206,7 @@ else:
 # ## I.3 — Hadronic phase: parametrization and grids
 #
 # The hadronic side is SFHo extended with hyperons and $\Delta$ resonances
-# (`2fam_phi`). The $\sigma$–$\Delta$ coupling $x_{\sigma\Delta}$ is the most
-# uncertain of the couplings and is the one we tag runs by.
+# (`2fam_phi`).
 #
 # Four independent variables appear, and which ones are active depends on the
 # equilibrium being imposed:
@@ -227,23 +234,19 @@ include_thermal_neutrinos   = True   # thermal nu/nubar (only where mu_nu = 0)
 
 # --- couplings -----------------------------------------------------------------
 # x_yD = g_yD / g_yN: Delta-meson couplings relative to the nucleon. The sigma-Delta
-# ratio is the uncertain one; the literature range is ~1.0-1.25 and it controls
-# how early Deltas appear, hence how soft the EoS gets.
-# U_HN = depth of the hyperon-nucleon potential at n_sat in symmetric matter,
-# which pins each hyperon family's scalar coupling.
 x_sigma_delta = 1.15          # TUNABLE: the headline coupling; tags the run
 x_omega_delta = 1.0           # SU(6) default
 x_rho_delta   = 1.0           # SU(6) default
 U_Lambda_N = -28.0            # MeV
-U_Sigma_N  = +30.0            # MeV, positive = strongly repulsive
+U_Sigma_N  = +30.0            # MeV
 U_Xi_N     = -18.0            # MeV
 
 xsd_tag = f"xsd{int(round(x_sigma_delta * 100))}"      # 1.15 -> 'xsd115'
 
-params_H = create_custom_parametrization(
+params_H = from_potential_depths(
     U_Lambda_N=U_Lambda_N, U_Sigma_N=U_Sigma_N, U_Xi_N=U_Xi_N,
-    x_sigma_delta=x_sigma_delta, x_omega_delta=x_omega_delta,
-    x_rho_delta=x_rho_delta, name=f"2fam_phi_{xsd_tag}")
+    x_Delta_sigma=x_sigma_delta, x_Delta_omega=x_omega_delta,
+    x_Delta_rho=x_rho_delta, name=f"2fam_phi_{xsd_tag}")
 
 # =============================================================================
 #  Grids. Every entry is TUNABLE; the reduced values only change sampling.
@@ -260,30 +263,34 @@ GRIDS = dict(
     # Y_L: NEVER reduced. 0.25 and 0.35 must remain grid nodes because they are
     # the two PNS snapshots (I.6); dropping them breaks Figs 2/3/4 and the
     # outcomes table without any error being raised.
-    Y_L=np.arange(0.1, 0.401, 0.05),
+    Y_L=np.arange(0.2, 0.401, 0.05),
 
     # S: entropy per baryon for the isentropic tables.
-    S=np.arange(0.5, 4.01, 0.5),
+    S=np.arange(1.0, 2.51, 0.5),
 
     # Quark EoS: denser in n_B than the hadronic table (quark matter only matters
     # at high density and its EoS is smooth, so this stays cheap).
     n_B_quark=np.linspace(0.5, 15, 80 if REDUCED_GRID else 400) * n_sat,
 )
 
-# TOV: entropies for which trapped sequences are built. Both 1.5 and 2.0 are
-# REQUIRED -- they are the two PNS snapshots.
-S_TOV = [1.5, 2.0] if REDUCED_GRID else [1.0, 1.5, 2.0, 2.5, 3.0]
-Y_L_TOV = [0.25, 0.35] if REDUCED_GRID else list(np.arange(0.10, 0.401, 0.05))
+# TOV: the (Y_L, S) snapshots for which trapped sequences are built. Both
+# S = 1.5 and 2.0 are REQUIRED -- they are the two PNS snapshots.
+#
+# The production lists ARE the table axes, not a wider hand-written range. The
+# isentropic EoS is tabulated on GRIDS['Y_L'] x GRIDS['S'], and asking the
+# interpolator for a node off the end of either axis (Y_L = 0.10, S = 3.0)
+# returns NaN for the WHOLE query, not just the edge -- the failure then
+# surfaces far downstream as "EOS has 0 finite rows" when the crust is
+# spliced on. The reduced lists stay hand-picked: two of each is a cheaper
+# smoke run, and both are nodes of the same grids.
+S_TOV = [1.5, 2.0] if REDUCED_GRID else list(GRIDS['S'])
+Y_L_TOV = [0.25, 0.35] if REDUCED_GRID else list(GRIDS['Y_L'])
 
 # Central energy densities for the HADRONIC TOV sequences [MeV/fm^3].
 E_C_VEC = generate_ec_logspace(e_min=150, e_max=2500,
                                n_points=25 if REDUCED_GRID else 100)
 
 # Central energy densities for the QUARK-star TOV sequences [MeV/fm^3]. A quark
-# star is self-bound and much more compact, so its sequence lives at lower e_c
-# and does not need the hadronic grid's reach. This is the grid the published
-# M_max filter and every quark M-R curve were computed on -- changing it moves
-# M_max, hence which cells the sigma_crit scan accepts, hence Fig. 5.
 E_C_VEC_QUARK = generate_ec_logspace(e_min=100, e_max=2000,
                                      n_points=25 if REDUCED_GRID else 80)
 
@@ -351,10 +358,6 @@ V_NUC = 4.18879e51            # fm^3; sphere of R = 100 m
 TAU_TARGET = 1e-3             # s; must nucleate within ~1 ms to matter
 
 # Surface tensions for which Q* / nucleation tables are built [MeV/fm^2].
-# All six are needed: Fig. 4 draws {50, 100, 150} for Set A and {150, 200, 250}
-# for Set B, Fig. 3 uses {80, 100, 150}, Appendix A {100, 150}. Dropping one does
-# not raise -- the curve simply vanishes from the figure -- which is why I.8
-# cross-checks this list against what the figures ask for.
 SIGMA_LIST = ([50., 100., 150.] if REDUCED_GRID
               else [50., 80., 100., 150., 200., 250.])
 
@@ -371,17 +374,13 @@ MAIN_FLAVOR, MAIN_CHARGE, MAIN_PHASE = 'saddlepoint', 'coulomb_minimize', 'unpCF
 # %% [markdown]
 # ## I.6 — The two PNS snapshots
 #
-# A proto-neutron star is not one object but a sequence of them. We follow two
-# moments, because the nucleation answer differs between them:
-#
 # * $t_0$ — **just after bounce**: lepton-rich ($Y_L=0.35$) and comparatively
 #   cold ($S=1.5$). Neutrino trapping keeps the EoS stiff, so $M_{\max}$ is high.
 # * $t_{T_{\max}}$ — **peak temperature**, a few seconds later: deleptonized to
 #   $Y_L=0.25$ and hotter ($S=2.0$). The EoS has softened, so $M_{\max}$ has
 #   *fallen* — a star that was stable at $t_0$ may not be now.
 #
-# Baryon number is conserved between them; gravitational mass is not. That
-# asymmetry is what makes the outcome (NS / QS / BH) non-trivial.
+# Baryon number is conserved between them; gravitational mass is not.
 
 # %%
 # 'color' is part of the figure contract, not decoration: orange = t_0 and red =
@@ -706,8 +705,17 @@ for _YL in Y_L_TOV:
 # %%
 for _p in quark_param_sets:
     _stag = q_tag(_p)
-    for _label, _extra in (('unpaired', dict(phase='unpaired', equilibrium='beta_eq')),
-                           ('cfl',      dict(phase='cfl', Delta0_values=[_p['Delta0']]))):
+    # Gluons and the thermal neutrino gas are per-phase, not global flags. In
+    # the paired phase the eight gluons are Meissner-massive (only the rotated
+    # photon stays massless) and there is no thermal neutrino gas, where every
+    # unpaired solver carries both. eos raises rather than silently dropping a
+    # sector it does not implement, so each phase states its own sectors here.
+    for _label, _extra in (('unpaired', dict(phase='unpaired', equilibrium='beta_eq',
+                                             include_gluons=True,
+                                             include_thermal_neutrinos=True)),
+                           ('cfl',      dict(phase='cfl', Delta0_values=[_p['Delta0']],
+                                             include_gluons=False,
+                                             include_thermal_neutrinos=False))):
         _path = DIRS['Q_eos'] / f'eos_quark_{_label}_{_stag}.dat'
         if _path.exists():
             print(f"  [skip] {_path.name}")
@@ -716,8 +724,7 @@ for _p in quark_param_sets:
         compute_alphabag_table(AlphaBagTableSettings(
             alpha=_p['alpha'], B4=_p['B4'], m_s=_p['m_s'],
             n_B_values=GRIDS['n_B_quark'], T_values=GRIDS['T'],
-            include_photons=True, include_gluons=True,
-            include_thermal_neutrinos=True,
+            include_photons=True,
             print_results=False, print_errors=True, print_timing=True,
             save_to_file=True, output_filename=str(_path), **_extra))
 
@@ -1127,7 +1134,7 @@ print("\nPart III complete: ready for figures.")
 # %%
 _demo_p = quark_param_sets[0]
 _demo_pars = quark_params(alpha=_demo_p['alpha'], B4=_demo_p['B4'],
-                          m_s=_demo_p['m_s'])
+                                 m_s=_demo_p['m_s'])
 _demo_nB, _demo_T, _demo_sig = 3.5 * n_sat, 30.0, 100.0
 
 # (1) one point, everything about it
@@ -1245,7 +1252,7 @@ for F1_SET in [quark_param_sets[0]]:
 
     _stag   = q_tag(F1_SET)
     _params = quark_params(alpha=F1_SET['alpha'], B4=F1_SET['B4'],
-                           m_s=F1_SET['m_s'])
+                                  m_s=F1_SET['m_s'])
 
     def _f1_get(phase, sg=F1_SIGMA):
         """The nucleation table for this method/phase/set/sigma (or None)."""
@@ -1577,7 +1584,7 @@ def _tau_lbl(t):
 for FN2_SET in quark_param_sets:
     _tag    = q_tag(FN2_SET)
     _params = quark_params(alpha=FN2_SET['alpha'], B4=FN2_SET['B4'],
-                           m_s=FN2_SET['m_s'])
+                                  m_s=FN2_SET['m_s'])
     _D0     = FN2_SET['Delta0']
     _T_CFL  = float(T_critical(_D0))          # CFL is undefined above this
 
@@ -1931,8 +1938,11 @@ _SIG8, _RS8, _MM8, _OK8 = (_F8['sig_crit'], _F8['reason'], _F8['M_max'],
 _vmin8 = float(np.nanmin(_SIG8))
 _vmax8 = float(np.nanmax(_SIG8[np.isfinite(_SIG8)]))
 # The smoke grid scans a single alpha_s, so a hard-coded slice list would index
-# off the end. Clip rather than assert: fewer panels is still a valid figure.
-F8_SHOW = [i for i in F8_SHOW if i < len(_al8)]
+# off the end. Clip rather than assert: fewer panels is still a valid figure --
+# but ZERO panels is not, and the clip empties the list whenever no requested
+# index survives (REDUCED_GRID scans one alpha_s, so [1, 3] -> []). Fall back to
+# every slice the grid actually has, which is the figure the reader wanted.
+F8_SHOW = [i for i in F8_SHOW if i < len(_al8)] or list(range(len(_al8)))
 
 # Contour colours over viridis: only white / very light hues stay legible
 # (blue, green and teal blend into the map; orange clashes with the vermillion
@@ -2044,7 +2054,7 @@ plt.show()
 APP_SET = quark_param_sets[0]
 APP_TAG = q_tag(APP_SET)
 APP_PAR = quark_params(alpha=APP_SET['alpha'], B4=APP_SET['B4'],
-                       m_s=APP_SET['m_s'])
+                              m_s=APP_SET['m_s'])
 APP_SIG = FIG_SIGMAS['appA_charge'][0]           # sigma of both panels
 APP_MT0 = MT0_REF                                # reference PNS
 APP_YL  = PNS_TMAX['YLH']                        # the t_Tmax snapshot
@@ -2805,7 +2815,11 @@ else:
     _DB, _RB = _dsig_diff(_gA, _gB)
     _dB = (_DB, _RB)
     _B4b, _D0b, _alb = _gA['B4_grid'], _gA['Delta0_grid'], _gA['alpha_slices']
-    _shw = [i for i in F8_SHOW if i < len(_alb)]     # same alpha panels as Fig 5
+    # Same alpha panels as Fig 5, clipped to THIS grid (a different scan, so it
+    # may be shorter) with the same non-empty floor -- symmetric_vlim over an
+    # empty list has no range to take.
+    _shw = ([i for i in F8_SHOW if i < len(_alb)]
+            or list(range(len(_alb))))
     _vB = symmetric_vlim([_DB[i] for i in _shw], pct=DSIG_PCT,
                          override=DSIG_VLIM)
     fig, _axB = paper_grid('1x2', mode='double', placeholder=False,
@@ -3258,7 +3272,7 @@ V6_SIGMAS = np.linspace(40., 250., 12 if REDUCED_GRID else 30)   # panel (b)
 V6_R = np.linspace(0.02, 12.0, 500)
 
 _v6_par = quark_params(alpha=V6_SET['alpha'], B4=V6_SET['B4'],
-                       m_s=V6_SET['m_s'])
+                              m_s=V6_SET['m_s'])
 _v6_nB, _v6_T, _ = central_state(MT0_REF, star_scan)
 print(f"V.6 at the reference PNS centre: n_B = {_v6_nB/n_sat:.2f} n_sat, "
       f"T = {_v6_T:.1f} MeV")
@@ -3365,7 +3379,7 @@ V7_T = np.linspace(1.0, 60.0, 15 if REDUCED_GRID else 40)   # MeV
 V7_NC = 1e48                   # attempt centres in the nucleation volume
 
 _v7_par = quark_params(alpha=V7_SET['alpha'], B4=V7_SET['B4'],
-                       m_s=V7_SET['m_s'])
+                              m_s=V7_SET['m_s'])
 _v7_nB = _v6_nB                # the same reference centre as V.6
 M_NEUTRON = 939.565            # MeV, for the hadronic mass density rho_H
 
