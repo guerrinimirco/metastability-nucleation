@@ -234,19 +234,19 @@ include_thermal_neutrinos   = True   # thermal nu/nubar (only where mu_nu = 0)
 
 # --- couplings -----------------------------------------------------------------
 # x_yD = g_yD / g_yN: Delta-meson couplings relative to the nucleon. The sigma-Delta
-x_sigma_delta = 1.15          # TUNABLE: the headline coupling; tags the run
-x_omega_delta = 1.0           # SU(6) default
-x_rho_delta   = 1.0           # SU(6) default
+x_Delta_sigma = 1.15          # TUNABLE: the headline coupling; tags the run
+x_Delta_omega = 1.0           # SU(6) default
+x_Delta_rho   = 1.0           # SU(6) default
 U_Lambda_N = -28.0            # MeV
 U_Sigma_N  = +30.0            # MeV
 U_Xi_N     = -18.0            # MeV
 
-xsd_tag = f"xsd{int(round(x_sigma_delta * 100))}"      # 1.15 -> 'xsd115'
+xsd_tag = f"xsd{int(round(x_Delta_sigma * 100))}"      # 1.15 -> 'xsd115'
 
 params_H = from_potential_depths(
     U_Lambda_N=U_Lambda_N, U_Sigma_N=U_Sigma_N, U_Xi_N=U_Xi_N,
-    x_Delta_sigma=x_sigma_delta, x_Delta_omega=x_omega_delta,
-    x_Delta_rho=x_rho_delta, name=f"2fam_phi_{xsd_tag}")
+    x_Delta_sigma=x_Delta_sigma, x_Delta_omega=x_Delta_omega,
+    x_Delta_rho=x_Delta_rho, name=f"2fam_phi_{xsd_tag}")
 
 # =============================================================================
 #  Grids. Every entry is TUNABLE; the reduced values only change sampling.
