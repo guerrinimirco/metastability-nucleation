@@ -331,14 +331,14 @@ deliberately when you do.
 as a **tripwire, not a target** — if a golden fails, find out why before touching
 the tolerance.
 
-**Two goldens currently fail, and both are known**: `test_regression_solver_cases`
-and `test_energy_barrier_matches_golden`. Neither is a physics change. Both
-compare round-off — ten quantities the CFL flavour lock forces to zero, compared
-*relatively*, and a `W(R)` curve reaching -1.5e+06 MeV compared *absolutely* at
-1e-9 — and both moved by ~1 ulp when `eos` adopted its shared conserved-charge
-basis. Every physically nonzero quantity still matches. Fixing them means
-re-deciding what the golden asserts, which is open work; the tolerances have
-**not** been loosened in the meantime.
+The suite is green: **72 passed, nothing skipped.** Two goldens used to fail
+here, and the fix changed *what* they assert, not their tolerance. Both had been
+comparing round-off — quantities the CFL flavour lock forces to **zero**, compared
+*relatively*, and a `W(R)` curve compared *absolutely* at 1e-9 on a 2.7e+06 MeV
+scale, which is below one ulp and so asserted bit-identity. They now assert the
+lock itself against the solver's own convergence gate, and `dW` relative to the
+barrier height. Both are strictly stronger claims than the comparisons they
+replaced.
 
 ---
 
@@ -355,6 +355,5 @@ re-deciding what the golden asserts, which is open work; the tolerances have
 
 ## Licence
 
-**TODO — not yet chosen.** Pick one before making the repository public;
-without a licence file, others have no legal right to use or build on this code.
-MIT or BSD-3-Clause are the usual choices for research code of this kind.
+[MIT](LICENSE) — code, figures and the committed data alike. Use it, modify it,
+build on it; keep the copyright notice and cite the paper.
